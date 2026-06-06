@@ -10,6 +10,15 @@ eigenen API-Key (OpenAI-kompatible Anbieter); der Schlüssel wird lokal verschl�
 
 **Stack:** Electron 33 · React 19 · TypeScript · Vite (electron-vite) · Vitest · Tailwind v4.
 
+## Download
+
+Fertige, portable Windows-`.exe` (kein Installer, kein Admin nötig) im neuesten Release:
+
+➡️ **[Neuestes Release herunterladen](https://github.com/edo-dzell/blitztext-app/releases/latest)** → unter „Assets" die `.exe`.
+
+> Unsigniert: Beim ersten Start zeigt Windows SmartScreen ggf. „Unbekannter Herausgeber" →
+> „Weitere Informationen" → „Trotzdem ausführen".
+
 ## Funktionen
 
 - Globaler Hotkey zum Diktieren, transkribieren über die Cloud

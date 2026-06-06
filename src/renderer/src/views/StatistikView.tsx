@@ -9,6 +9,7 @@ import {
   type ModellPreis,
   type PreisOverrides
 } from '@shared/pricing'
+import { preisModellListen } from '@/lib/preis-modelle'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -188,12 +189,14 @@ function Kennzahl({ titel, wert }: { titel: string; wert: string }) {
   )
 }
 
-// Welche Preisfelder ein Modell hat, leitet sich aus der Default-Tabelle ab (ASR vs. Chat).
-const ASR_MODELLE = Object.keys(PREISE).filter((id) => PREISE[id].asrProMinuteUsd !== undefined)
-const CHAT_MODELLE = Object.keys(PREISE).filter((id) => PREISE[id].inputPro1MUsd !== undefined)
-
 function PreisePane({ settings, speichern }: Props) {
   const [overrides, setOverrides] = useState<PreisOverrides>(settings.preisOverrides)
+  // Editierbare Modelle = Defaults (PREISE) ∪ Katalog der konfigurierten Anbieter ∪ Override-Keys.
+  // So erscheinen auch Mistral/konfigurierte Anbieter (nicht nur die OpenAI/Groq-Defaults).
+  const { asr: ASR_MODELLE, chat: CHAT_MODELLE } = useMemo(
+    () => preisModellListen(settings.anbieter, settings.preisOverrides),
+    [settings.anbieter, settings.preisOverrides]
+  )
   const [kurs, setKurs] = useState<string>(String(settings.usdEurKurs))
   const [busy, setBusy] = useState(false)
   const { registriereDirty } = useNavGuard()

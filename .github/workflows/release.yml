@@ -15,6 +15,12 @@ on:
 permissions:
   contents: write            # nötig, damit der Job ein Release anlegen darf
 
+env:
+  # Node-20-Actions (checkout/setup-node/upload-artifact) werden ab 16.06.2026 zwangsweise auf Node 24
+  # migriert → jetzt opt-in, um die Deprecation-Warnung loszuwerden (GitHub-Hinweis). Major-Tags der
+  # Actions bei Verfügbarkeit (v5) anheben.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: windows-latest

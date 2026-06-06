@@ -1,6 +1,6 @@
 {
   "name": "blitztext-app",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Windows-Neuschrieb der Blitztext Speech-to-Text App (Electron + React + TypeScript)",
   "private": true,
   "author": "edo-dzell",
@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "build:helper": "bash native/win-paste/build.sh",
     "package:win": "npm run build:helper && electron-vite build && electron-builder --win && node scripts/retain-releases.mjs",
+    "package:exe": "npm run build:helper && electron-vite build && electron-builder --win portable",
     "version:jump": "npm version minor --no-git-tag-version",
     "version:improve": "npm version patch --no-git-tag-version"
   },
