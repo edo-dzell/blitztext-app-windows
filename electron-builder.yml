@@ -1,0 +1,49 @@
+appId: de.blitztext.app
+productName: Blitztext
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+  # Produktive node_modules (electron-builder filtert devDependencies automatisch heraus). Nötig,
+  # weil der Main-Prozess externe Laufzeit-Deps lädt (uiohook-napi, ADR-0002) — electron-vite
+  # externalisiert sie statt sie zu bündeln.
+  - node_modules/**
+
+# Native Module aus dem asar auspacken, sonst nicht ladbar. uiohook-napi ist N-API mit prebuilds
+# (node-gyp-build wählt zur Laufzeit prebuilds/win32-x64) → kein Rebuild nötig (s. npmRebuild:false).
+asarUnpack:
+  - node_modules/uiohook-napi/**
+
+extraResources:
+  - from: resources
+    to: .
+
+# uiohook-napi bringt fertige win32-Binaries mit (prebuilds, N-API/ABI-stabil). @electron/rebuild
+# würde sonst from-source cross-kompilieren wollen — das kann node-gyp auf Linux nicht. Mit den
+# Prebuilds bleibt das v1-zip auf Linux baubar (ADR-0006).
+npmRebuild: false
+
+# v1 = portables zip, unsigniert (ADR-0006). Zielgruppe: kleines internes Team auf bekannten
+# Maschinen. Das zip-Target baut auf Linux OHNE wine (anders als nsis/portable). Der Nutzer
+# entpackt einmal und startet Blitztext.exe aus stabilem Ordner; win-paste.exe liegt als
+# extraResource daneben (process.resourcesPath, s. win-paste-path.ts).
+win:
+  target:
+    - zip
+  artifactName: ${productName}-${version}-win-portable.${ext}
+  # v1 ist unsigniert (ADR-0006). signAndEditExecutable=false ueberspringt den
+  # signtool/rcedit-Schritt, der auf Linux sonst WINE braucht — so baut das zip komplett
+  # ohne wine. Folge: keine in die .exe gestempelten Versions-Metadaten/Icon (kosmetisch,
+  # in v2 mit Signierung wieder aktiv).
+  signAndEditExecutable: false
+
+# nsis-Installer + Code-Signierung = v2/RMM (ADR-0005, #09), in v1 bewusst nicht aktiv:
+# nsis:
+#   oneClick: false        # Installationsumfang waehlbar; unbeaufsichtigt: Setup.exe /S /allusers
+#   perMachine: false
+#   allowElevation: true
+#   allowToChangeInstallationDirectory: true

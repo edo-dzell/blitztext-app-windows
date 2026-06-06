@@ -1,0 +1,50 @@
+import { describe, it, expect } from 'vitest'
+import {
+  tiefGleich,
+  workflowEntwurfGeaendert,
+  einstellungenGeaendert
+} from '@renderer/lib/dirty'
+import { defaultSettings } from '@main/settings/store'
+import { BUILTIN_WORKFLOWS } from '@shared/workflows'
+
+const def = { ...BUILTIN_WORKFLOWS[1] } // 'improve' (rewrites=true)
+
+describe('tiefGleich', () => {
+  it('gleich für strukturell identische Werte', () => {
+    expect(tiefGleich({ a: 1, b: [1, 2] }, { a: 1, b: [1, 2] })).toBe(true)
+  })
+  it('ungleich bei Abweichung', () => {
+    expect(tiefGleich({ a: 1 }, { a: 2 })).toBe(false)
+  })
+})
+
+describe('workflowEntwurfGeaendert (P4 — beide Entwürfe)', () => {
+  const chord = ['ControlRight', 'ShiftRight', 'Digit2']
+  it('false bei unveränderter Definition UND unverändertem Chord', () => {
+    expect(workflowEntwurfGeaendert({ ...def }, def, [...chord], chord)).toBe(false)
+  })
+  it('true bei reiner Definitionsänderung', () => {
+    expect(workflowEntwurfGeaendert({ ...def, temperature: 0.9 }, def, [...chord], chord)).toBe(true)
+  })
+  it('true bei reiner Hotkey-Änderung', () => {
+    expect(workflowEntwurfGeaendert({ ...def }, def, ['ControlLeft'], chord)).toBe(true)
+  })
+})
+
+describe('einstellungenGeaendert (P8)', () => {
+  it('false nach Roundtrip (gleiche Defaults)', () => {
+    expect(einstellungenGeaendert(defaultSettings(), defaultSettings())).toBe(false)
+  })
+  it('true bei geändertem Feld', () => {
+    expect(
+      einstellungenGeaendert({ ...defaultSettings(), language: 'en' }, defaultSettings())
+    ).toBe(true)
+  })
+  it('ignoriert apiKeyStatus (Main-only Feld)', () => {
+    const mitStatus = {
+      ...defaultSettings(),
+      apiKeyStatus: { openai: { status: 'verifiziert', zuletztGetestetMs: 1 } }
+    } as unknown as ReturnType<typeof defaultSettings>
+    expect(einstellungenGeaendert(mitStatus, defaultSettings())).toBe(false)
+  })
+})

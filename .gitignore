@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# build / bundler output
+out/
+dist/
+release/
+.vite/
+*.tsbuildinfo
+
+# cross-kompiliertes Helfer-Binary (Bauartefakt, ADR-0006; Quelle: native/win-paste/)
+resources/win-paste.exe
+
+# tests
+coverage/
+
+# secrets / local env
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

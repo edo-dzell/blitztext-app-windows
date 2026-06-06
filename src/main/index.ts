@@ -1,0 +1,395 @@
+import {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  ipcMain,
+  nativeImage,
+  Notification,
+  screen,
+  nativeTheme
+} from 'electron'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { validateApiKey } from './secrets'
+import {
+  createApiKeyVault,
+  migriereLegacyApiKey,
+  type ApiKeyVault
+} from '@main/secrets/api-key-vault'
+import { createMainComposition, type MainComposition } from '@main/composition-root'
+import { createRecorder } from '@main/recording/recorder-adapter'
+import { createPasteAusgabe } from '@main/output/paste-adapter'
+import { createSettingsFile } from '@main/settings/settings-file'
+import { safeStorageCipher } from '@main/secrets/safe-storage-cipher'
+import {
+  createHistoryFile,
+  createApiKeyFile,
+  createApiKeyVaultFile
+} from '@main/secrets/ciphertext-file'
+import { createStatsFile } from '@main/stats/stats-file'
+import { starteUiohookQuelle } from '@main/hotkey/uiohook-source'
+import { spiegleStatus } from '@main/window/tray-status'
+import { pillenStatus } from '@main/window/pill-status'
+import { istAbbruchOderTimeout } from '@main/session/abbruch-guard'
+import { createSettingsStore, type BlitztextSettings, type ApiKeyStatus } from '@main/settings/store'
+import { sendeAn } from '@main/window/send-to-window'
+
+// Prozessweiter Wächter (#03): ein abgebrochener/getimeouteter Anbieter-fetch (undici) kann eine
+// unhandledRejection erzeugen (RESEARCH R1). NUR Abbruch/Timeout schlucken — echte Bugs eskalieren
+// (re-throw → uncaughtException = Default-Verhalten, nichts maskieren).
+process.on('unhandledRejection', (grund) => {
+  if (istAbbruchOderTimeout(grund)) return
+  throw grund
+})
+
+let tray: Tray | null = null
+let settingsWindow: BrowserWindow | null = null
+let recorderWindow: BrowserWindow | null = null
+let pillWindow: BrowserWindow | null = null
+let pillFehlerTimer: ReturnType<typeof setTimeout> | null = null
+let stopUiohook: () => void = () => {}
+let isQuitting = false
+
+// Dunkle Taskleiste → helles Icon, helle Taskleiste → dunkles Icon (Windows kennt keine Template-
+// Images; shouldUseDarkColors ist die beste verfügbare Näherung, ADR-Recherche §5).
+function resolveTrayIcon(dark = nativeTheme.shouldUseDarkColors): Electron.NativeImage {
+  const name = dark ? 'tray-light.png' : 'tray-dark.png'
+  const file = app.isPackaged
+    ? join(process.resourcesPath, name)
+    : join(app.getAppPath(), 'resources', name)
+  return existsSync(file) ? nativeImage.createFromPath(file) : nativeImage.createEmpty()
+}
+
+function aktualisiereTrayIcon(dark = nativeTheme.shouldUseDarkColors): void {
+  if (tray) tray.setImage(resolveTrayIcon(dark))
+}
+
+function createSettingsWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 1080,
+    height: 720,
+    minWidth: 880,
+    minHeight: 600,
+    show: false,
+    title: 'Blitztext',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  // Tray-App-Verhalten: Schließen versteckt das Fenster, beendet die App nicht.
+  window.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault()
+      window.hide()
+    }
+  })
+
+  // Wird das Fenster doch zerstört (z. B. beim Beenden): Referenz nullen, sonst würde sendeAn
+  // (history:changed, P5b) auf ein zerstörtes Objekt zugreifen.
+  window.on('closed', () => {
+    settingsWindow = null
+  })
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    void window.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  return window
+}
+
+function showSettings(): void {
+  if (!settingsWindow) settingsWindow = createSettingsWindow()
+  settingsWindow.show()
+  settingsWindow.focus()
+}
+
+// Verstecktes, app-langlebiges Aufnahme-Fenster (#03/#11). EINMAL hier beim Start geladen — nie
+// pro Aufnahme neu erzeugen: loadFile/URL zieht sonst den Fokus (electron#8649, RESEARCH §5), was
+// das Paste-Ziel zerstören würde. Während der Aufnahme fließen nur IPC-Befehle, kein Fokuswechsel.
+function createRecorderWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  // Mikrofon im Recorder-Fenster erlauben — BEIDE Handler (sonst lehnt der Check getUserMedia ab,
+  // RESEARCH §5). Die OS-Mikrofon-Datenschutz-Einstellung bleibt eine separate Fehlerquelle.
+  const ses = window.webContents.session
+  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'media'))
+  ses.setPermissionCheckHandler((_wc, permission) => permission === 'media')
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    void window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/recorder.html`)
+  } else {
+    void window.loadFile(join(__dirname, '../renderer/recorder.html'))
+  }
+
+  return window
+}
+
+// Fokusfreie Status-Pille (ADR-0007/0009, Q2-Config): always-on-top, click-through, nimmt NIE Fokus
+// (focusable:false + nur showInactive). Einmal beim Start geladen (electron#8649). transparent für
+// die abgerundete Karte; opaker Inhalt umgeht die meisten Windows-Transparenz-GPU-Bugs (Fallback bei
+// schwarzem Kasten: app.disableHardwareAcceleration() — HITL-Entscheidung).
+function createPillWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 260,
+    height: 56,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    thickFrame: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      backgroundThrottling: false
+    }
+  })
+  window.setAlwaysOnTop(true, 'screen-saver')
+  window.setIgnoreMouseEvents(true, { forward: true })
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    void window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/pill.html`)
+  } else {
+    void window.loadFile(join(__dirname, '../renderer/pill.html'))
+  }
+  return window
+}
+
+// Unten mittig über der Taskleiste, auf dem Display unter dem Cursor (dort wurde der Hotkey ausgelöst).
+function positioniertePille(window: BrowserWindow): void {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const { x, y, width, height } = display.workArea
+  const [pw, ph] = window.getSize()
+  window.setBounds({ x: x + Math.round((width - pw) / 2), y: y + height - ph - 12, width: pw, height: ph })
+}
+
+function createTray(): void {
+  tray = new Tray(resolveTrayIcon())
+  tray.setToolTip('Blitztext')
+  tray.on('click', showSettings)
+}
+
+// Tray-Menü mit „Abbrechen" (aktiv nur bei laufendem Workflow). Bei jedem onStatus neu bauen (#04).
+function baueTrayMenu(comp: MainComposition): void {
+  if (!tray) return
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Einstellungen öffnen…', click: showSettings },
+      { label: 'Abbrechen', enabled: comp.beschaeftigt(), click: () => comp.brichAb() },
+      { type: 'separator' },
+      {
+        label: 'Beenden',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+}
+
+function benachrichtige(body: string): void {
+  if (Notification.isSupported()) new Notification({ title: 'Blitztext', body }).show()
+}
+
+// P1: apiKeyStatus[anbieterId] setzen (status) oder entfernen (null) — frisch laden, NUR diesen Eintrag
+// mergen, schreiben, Live-Reconfigure. So überschreibt kein Renderer-Entwurf den Status (Lost-Update).
+async function mergeApiKeyStatus(
+  comp: MainComposition,
+  anbieterId: string,
+  status: ApiKeyStatus | null
+): Promise<void> {
+  const aktuell = await comp.einstellungen.load()
+  const apiKeyStatus = { ...aktuell.apiKeyStatus }
+  if (status === null) {
+    if (!(anbieterId in apiKeyStatus)) return
+    delete apiKeyStatus[anbieterId]
+  } else {
+    apiKeyStatus[anbieterId] = status
+  }
+  const next = { ...aktuell, apiKeyStatus }
+  await comp.einstellungen.save(next)
+  comp.aktualisiere(next)
+}
+
+function registerIpc(apiKeys: ApiKeyVault, comp: MainComposition): void {
+  ipcMain.handle('app:ping', () => 'pong')
+  ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('theme:systemDark', () => nativeTheme.shouldUseDarkColors)
+
+  // Key pro Anbieter (Vault, eine Datei je Anbieter). Validierung gegen die Base-URL DIESES Anbieters.
+  ipcMain.handle('apikey:has', (_event, anbieterId: string) => apiKeys.has(anbieterId))
+  ipcMain.handle('apikey:maske', (_event, anbieterId: string) => apiKeys.maske(anbieterId))
+  ipcMain.handle('apikey:save', async (_event, anbieterId: string, key: string, baseUrl: string) => {
+    // Gegen die Base-URL DIESES Anbieters validieren — vom Renderer mitgegeben, damit auch ein neu
+    // angelegter (noch nicht gespeicherter) Anbieter korrekt geprüft wird (sonst fiele es auf den
+    // Standard-Anbieter zurück → fremder Key gegen OpenAI → fälschlich „ungültig").
+    const validation = await validateApiKey(key, { baseUrl })
+    if (validation.status === 'valid') {
+      await apiKeys.set(anbieterId, key)
+      // P1: apiKeyStatus ist MAIN-ONLY (Lost-Update-Schutz) — frisch laden, NUR diesen Eintrag mergen,
+      // schreiben, Live-Reconfigure. Nie aus dem Renderer-Entwurf geführt.
+      await mergeApiKeyStatus(comp, anbieterId, {
+        status: 'verifiziert',
+        zuletztGetestetMs: Date.now()
+      })
+    }
+    return validation
+  })
+  ipcMain.handle('apikey:clear', async (_event, anbieterId: string) => {
+    await apiKeys.clear(anbieterId)
+    await mergeApiKeyStatus(comp, anbieterId, null) // Status-Eintrag analog räumen
+  })
+
+  // V2: Einstellungen (ohne Secrets) lesen/speichern → Live-Reconfigure. (Key-Lebenszyklus hängt jetzt
+  // an clear(anbieterId) beim Anbieter-Entfernen, nicht mehr an einer Provider-Wechsel-Heuristik.)
+  ipcMain.handle('settings:get', () => comp.einstellungen.load())
+  ipcMain.handle('settings:save', async (_event, next: BlitztextSettings) => {
+    // P1: apiKeyStatus NICHT aus dem Renderer übernehmen — Main bewahrt den persistierten Stand.
+    const aktuell = await comp.einstellungen.load()
+    const zusammengefuehrt = { ...next, apiKeyStatus: aktuell.apiKeyStatus }
+    await comp.einstellungen.save(zusammengefuehrt)
+    comp.aktualisiere(zusammengefuehrt)
+  })
+
+  // V2: Prompt-Assistent (Chat-Anbieter) — ohne Key des Standard-Anbieters klare Fehlermeldung.
+  ipcMain.handle('workflow:assistEntwurf', async (_event, beschreibung: string, bestehend?: string) => {
+    if (!(await apiKeys.has(comp.standardAnbieterId()))) {
+      throw new Error('Kein API-Key gesetzt. Bitte zuerst in den Einstellungen hinterlegen.')
+    }
+    return comp.assistiere(beschreibung, bestehend)
+  })
+
+  // V2: Verlauf + Statistik.
+  ipcMain.handle('history:liste', () => comp.verlauf.liste())
+  ipcMain.handle('history:loeschen', () => comp.verlauf.loeschen())
+  ipcMain.handle('history:loeschenEintrag', (_event, id: string) =>
+    comp.verlauf.loeschenEintrag(id)
+  )
+  ipcMain.handle('stats:zusammenfassung', () => comp.stats.zusammenfassung())
+  ipcMain.handle('stats:loeschen', () => comp.stats.loeschen())
+}
+
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', showSettings)
+
+  app.whenReady().then(async () => {
+    app.setAppUserModelId('de.blitztext.app') // Windows: Voraussetzung für zuverlässige Notifications
+
+    // Reihenfolge (ADR-0010): Settings laden (liefert standardAnbieterId) → Legacy-Key (api-key.bin)
+    // auf die anbieter-spezifische Datei migrieren → Vault bauen → dann Komposition.
+    const settingsFile = createSettingsFile()
+    const startSettings = await createSettingsStore({ file: settingsFile }).load()
+    await migriereLegacyApiKey({
+      legacy: createApiKeyFile(),
+      ziel: createApiKeyVaultFile(startSettings.standardAnbieterId)
+    })
+    const apiKeys = createApiKeyVault({ cipher: safeStorageCipher, dateiFuer: createApiKeyVaultFile })
+    createTray()
+
+    // Farbschema: Systemänderungen an die Fenster broadcasten + Tray-Icon nachziehen (#Design).
+    nativeTheme.on('updated', () => {
+      const dark = nativeTheme.shouldUseDarkColors
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('theme:systemChanged', dark)
+      aktualisiereTrayIcon(dark)
+    })
+
+    // M3/#11 — die Sitzung montieren und die nativen Adapter anschließen.
+    recorderWindow = createRecorderWindow()
+    pillWindow = createPillWindow()
+    const ausgabe = createPasteAusgabe({
+      fenster: {
+        // Manuelle Auslösequelle: v1-minimal als Notification (vollständige Workflow-Anzeige + manueller
+        // Tray-Start brauchen Aufnahme-UI → zurückgestellt; Kernpfad ist der Hotkey).
+        anzeigen: (text) => benachrichtige(text),
+        zeigeEinstellungen: showSettings,
+        zeigeManuellenHinweis: () =>
+          benachrichtige('In Zwischenablage kopiert — bitte mit Strg+V einfügen.')
+      }
+    })
+
+    const comp = await createMainComposition({
+      recorder: createRecorder(recorderWindow),
+      ausgabe,
+      apiKeys,
+      settingsFile,
+      // V2 Strang D: verschlüsselter Verlauf (safeStorage/DPAPI) + text-freie Statistik.
+      verlaufCipher: safeStorageCipher,
+      verlaufFile: createHistoryFile(),
+      statsFile: createStatsFile(),
+      // P5b: nach erfolgtem Verlauf-Schreiben das Dashboard zum Neuladen anstoßen (race-frei, da das
+      // Event erst nach dem aufgelösten Schreibvorgang feuert). sendeAn prüft null/isDestroyed.
+      onHistoryChanged: () => sendeAn(settingsWindow, 'history:changed')
+    })
+
+    // IPC erst nach dem Bau der Komposition registrieren (Handler brauchen comp), dann Fenster zeigen.
+    registerIpc(apiKeys, comp)
+    baueTrayMenu(comp)
+    showSettings()
+
+    // Runner-Phase → Tray-Tooltip + fokusfreie Status-Pille (stiehlt keinen Fokus, ADR-0007).
+    comp.sitzung.onStatus = (phase) => {
+      // Nach Lauf-Ende ausstehende Settings-Änderungen übernehmen (während eines Laufs gespeichert).
+      if (phase.status === 'fertig' || phase.status === 'fehler' || phase.status === 'idle') {
+        comp.wendeAusstehendeAn()
+      }
+      baueTrayMenu(comp) // „Abbrechen"-Aktivzustand nachziehen
+      if (tray) spiegleStatus(tray, phase)
+      if (!pillWindow) return
+      if (pillFehlerTimer) {
+        clearTimeout(pillFehlerTimer)
+        pillFehlerTimer = null
+      }
+      const s = pillenStatus(phase)
+      if (s.sichtbar) {
+        pillWindow.webContents.send('pill:status', s.label)
+        positioniertePille(pillWindow)
+        pillWindow.showInactive()
+        // Fehler bleibt sonst stehen (kein weiteres onStatus bis zum nächsten Lauf) → auto-ausblenden.
+        if (phase.status === 'fehler') {
+          pillFehlerTimer = setTimeout(() => pillWindow?.hide(), 4000)
+        }
+      } else {
+        pillWindow.hide()
+      }
+    }
+
+    // Globaler Hotkey über uiohook → verarbeiteTaste → Sitzung (ersetzt den globalShortcut-Platzhalter).
+    stopUiohook = starteUiohookQuelle({ verarbeiteTaste: comp.verarbeiteTaste })
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) showSettings()
+    })
+  }).catch((err) => {
+    console.error('App-Start fehlgeschlagen:', err)
+  })
+
+  // Tray-App: weiterlaufen, auch wenn kein Fenster offen ist.
+  app.on('window-all-closed', () => {})
+
+  app.on('before-quit', () => {
+    isQuitting = true
+  })
+
+  app.on('will-quit', () => {
+    stopUiohook()
+  })
+}

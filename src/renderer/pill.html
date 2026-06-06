@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Blitztext Status</title>
+    <style>
+      /* Body transparent; sichtbar ist nur die opake Karte (umgeht Windows-Transparenz-GPU-Bugs). */
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+      body { display: flex; align-items: center; justify-content: center;
+             font-family: system-ui, "Segoe UI", Roboto, sans-serif; }
+      #pille {
+        background: #1e1e22; color: #f5f5f7;
+        padding: 10px 18px; border-radius: 999px;
+        font-size: 14px; font-weight: 600; white-space: nowrap;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pille">Blitztext</div>
+    <script type="module" src="./src/pill.ts"></script>
+  </body>
+</html>

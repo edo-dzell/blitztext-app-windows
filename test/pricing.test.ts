@@ -1,0 +1,119 @@
+import { describe, it, expect } from 'vitest'
+import {
+  asrKostenUsd,
+  chatKostenUsd,
+  eurAus,
+  laufKosten,
+  EUR_PRO_USD,
+  aufgelosteTabelle,
+  zeileKostenUsd
+} from '@shared/pricing'
+
+describe('pricing', () => {
+  it('whisper-1: 0,006 USD pro Minute', () => {
+    expect(asrKostenUsd('whisper-1', 60)).toBeCloseTo(0.006, 6)
+    expect(asrKostenUsd('whisper-1', 30)).toBeCloseTo(0.003, 6)
+  })
+
+  it('gpt-4o-mini: Input/Output je 1M Token', () => {
+    // 1M Input + 1M Output = 0.15 + 0.60
+    expect(chatKostenUsd('gpt-4o-mini', 1_000_000, 1_000_000)).toBeCloseTo(0.75, 6)
+  })
+
+  it('gpt-4o: 2.50 / 10.00 pro 1M', () => {
+    expect(chatKostenUsd('gpt-4o', 1_000_000, 0)).toBeCloseTo(2.5, 6)
+    expect(chatKostenUsd('gpt-4o', 0, 1_000_000)).toBeCloseTo(10.0, 6)
+  })
+
+  it('groq whisper-large-v3-turbo: 0,04 USD/Stunde', () => {
+    expect(asrKostenUsd('whisper-large-v3-turbo', 3600)).toBeCloseTo(0.04, 6)
+  })
+
+  it('moderne OpenAI-Transcribe-Modelle sind als Minuten-Näherung bepreist (#21)', () => {
+    expect(asrKostenUsd('gpt-4o-mini-transcribe', 60)).toBeCloseTo(0.003, 6)
+    expect(asrKostenUsd('gpt-4o-transcribe', 60)).toBeCloseTo(0.006, 6)
+  })
+
+  it('unbekanntes Modell → null (keine Schätzung)', () => {
+    expect(asrKostenUsd('voxtral-mini-latest', 60)).toBeNull()
+    expect(asrKostenUsd('irgendwas-unbekanntes', 60)).toBeNull()
+    expect(chatKostenUsd('mistral-large-latest', 1000, 1000)).toBeNull()
+  })
+
+  // --- v0.2.x #16: EUR-Schätzung + Lauf-Kosten je Eintrag (VL-2) ---
+
+  it('eurAus rechnet mit der festen Schätz-Konstante', () => {
+    expect(EUR_PRO_USD).toBe(0.86)
+    expect(eurAus(1)).toBeCloseTo(0.86, 6)
+    expect(eurAus(0)).toBe(0)
+  })
+
+  it('laufKosten summiert ASR (pro Minute) + Chat (Token) in USD und EUR', () => {
+    const k = laufKosten({
+      asrModell: 'whisper-1',
+      dauerSekunden: 60, // 1 min → 0,006 USD
+      chatModell: 'gpt-4o-mini',
+      usage: { promptTokens: 1_000_000, completionTokens: 1_000_000 } // 0,75 USD
+    })
+    expect(k.usd).toBeCloseTo(0.756, 6)
+    expect(k.eur).toBeCloseTo(0.756 * 0.86, 6)
+  })
+
+  it('laufKosten nimmt den bekannten Teil, wenn nur ASR bepreist ist', () => {
+    const k = laufKosten({ asrModell: 'whisper-1', dauerSekunden: 60 })
+    expect(k.usd).toBeCloseTo(0.006, 6)
+    expect(k.eur).toBeCloseTo(0.006 * 0.86, 6)
+  })
+
+  it('laufKosten → null/null, wenn nichts bepreist ist', () => {
+    expect(laufKosten({ asrModell: 'irgendwas-unbekanntes', dauerSekunden: 60 })).toEqual({
+      usd: null,
+      eur: null
+    })
+  })
+
+  // --- v0.3 P7: editierbare Preise (Overrides) + editierbarer Kurs ---
+
+  it('aufgelosteTabelle mischt Overrides feldweise (Override gewinnt, fehlende Felder Default)', () => {
+    const t = aufgelosteTabelle({ 'gpt-4o-mini': { inputPro1MUsd: 1 } })
+    expect(t['gpt-4o-mini'].inputPro1MUsd).toBe(1) // Override gewinnt
+    expect(t['gpt-4o-mini'].outputPro1MUsd).toBe(0.6) // fehlendes Feld bleibt Default
+    expect(t['gpt-4o'].inputPro1MUsd).toBe(2.5) // unangetastetes Modell unverändert
+  })
+
+  it('aufgelosteTabelle kennt auch reine Override-Modelle (neue id)', () => {
+    const t = aufgelosteTabelle({ 'eigenes-modell': { inputPro1MUsd: 9, outputPro1MUsd: 9 } })
+    expect(chatKostenUsd('eigenes-modell', 1_000_000, 0, t)).toBeCloseTo(9, 6)
+  })
+
+  it('asr/chatKostenUsd nutzen die übergebene Tabelle', () => {
+    const t = aufgelosteTabelle({ 'whisper-1': { asrProMinuteUsd: 0.012 } })
+    expect(asrKostenUsd('whisper-1', 60, t)).toBeCloseTo(0.012, 6)
+  })
+
+  it('eurAus mit abweichendem Kurs', () => {
+    expect(eurAus(10, 0.9)).toBeCloseTo(9, 6)
+  })
+
+  it('zeileKostenUsd: ASR + Chat, null wenn ein Teil unbekannt', () => {
+    const zeile = {
+      asrModell: 'whisper-1',
+      audioSekunden: 60,
+      chatModell: 'gpt-4o-mini',
+      promptTokens: 1_000_000,
+      completionTokens: 1_000_000
+    }
+    expect(zeileKostenUsd(zeile)).toBeCloseTo(0.756, 6)
+    expect(zeileKostenUsd({ ...zeile, chatModell: '' })).toBeCloseTo(0.006, 6) // reine Transkription
+    expect(zeileKostenUsd({ ...zeile, chatModell: 'unbekannt' })).toBeNull()
+  })
+
+  it('laufKosten honoriert overrides + kurs', () => {
+    const k = laufKosten(
+      { asrModell: 'whisper-1', dauerSekunden: 60 },
+      { overrides: { 'whisper-1': { asrProMinuteUsd: 0.012 } }, kurs: 0.9 }
+    )
+    expect(k.usd).toBeCloseTo(0.012, 6)
+    expect(k.eur).toBeCloseTo(0.012 * 0.9, 6)
+  })
+})
