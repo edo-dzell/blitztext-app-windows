@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createWorkflowRunner, type WorkflowRunnerDeps } from '@main/workflow/runner'
 import * as quality from '@main/transcription/quality'
-import { resolveSystemPrompt, buildSystemPrompt } from '@main/rewrite/prompt-builder'
+import { resolveSystemPrompt, buildSystemPrompt, kapsleTranskript } from '@main/rewrite/prompt-builder'
 import { getWorkflow, BUILTIN_WORKFLOWS } from '@shared/workflows'
 
 const audio = new Blob(['x'], { type: 'audio/webm' })
@@ -136,11 +136,31 @@ describe('createWorkflowRunner', () => {
 
     expect(phases).toEqual(['aufnehmen', 'transkribieren', 'umschreiben', 'fertig'])
     expect(terminal).toEqual({ status: 'fertig', text: 'fertige nachricht' })
+    // System-Prompt = die volle Laufzeit-Auflösung (inkl. Daten-Rahmen), Rohtext gekapselt gesendet.
     expect(rewriteInput).toEqual({
-      system: buildSystemPrompt('improve', settings),
-      user: 'rohtext hier'
+      system: resolveSystemPrompt(def('improve'), settings),
+      user: kapsleTranskript('rohtext hier')
     })
+    // Basis bleibt der v1-Builder-Text als Präfix; der Rohtext steckt zwischen den Markierungen.
+    expect(rewriteInput?.system.startsWith(buildSystemPrompt('improve', settings))).toBe(true)
+    expect(rewriteInput?.user).toContain('rohtext hier')
     expect(rewriteOpts).toMatchObject({ model: 'gpt-4o-mini', temperature: 0.3 })
+  })
+
+  it('entfernt vom Modell zurückgespiegelte Transkript-Markierungen aus dem Endtext', async () => {
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: { async transcribe() { return 'roh' } },
+        rewrite: {
+          async rewrite() {
+            return { text: '<transkript>\nfertige nachricht\n</transkript>' }
+          }
+        }
+      })
+    )
+    runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
+    const terminal = await runner.stop()
+    expect(terminal).toEqual({ status: 'fertig', text: 'fertige nachricht' })
   })
 
   it('calm: routet das Umschreiben auf gpt-4o @ 0.4', async () => {

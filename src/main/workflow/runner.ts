@@ -11,6 +11,7 @@ import type { WorkflowDefinition } from '@shared/workflows'
 import type { TranscriptionProvider } from '@main/transcription/cloud-provider'
 import type { RewriteProvider } from '@main/rewrite/cloud-provider'
 import type { resolveSystemPrompt, RewriteSettings } from '@main/rewrite/prompt-builder'
+import { kapsleTranskript, entferneTranskriptMarken } from '@main/rewrite/prompt-builder'
 
 export interface RecordingResult {
   audio: Blob
@@ -200,11 +201,14 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
         // NICHT mehr def.model bevorzugen — sonst ginge ein gepinntes OpenAI-Modell (Built-ins) gegen
         // Mistral/Groq und stürzte ab. Der def.model-Vorrang steckt bereits korrekt in chatModell.
         const model = input?.chatModell ?? ''
+        // Rohtext gekapselt senden (Daten-Rahmen, prompt-builder): zieht die Grenze „zu bearbeitende
+        // Daten" vs. „Anweisung", damit ein direkt ansprechendes Diktat nicht als Befehl befolgt wird.
         const rewritten = await deps.rewrite.rewrite(
-          { system, user: rohtext },
+          { system, user: kapsleTranskript(rohtext) },
           { model, temperature: def.temperature, signal: controller.signal }
         )
-        const endtext = deps.quality.cleanedTranscript(rewritten.text)
+        // Etwaig zurückgespiegelte Markierungen entfernen, bevor cleanedTranscript trimmt.
+        const endtext = deps.quality.cleanedTranscript(entferneTranskriptMarken(rewritten.text))
         return abschluss(rohtext, endtext, recording.durationSeconds, rewritten.usage, true)
       } catch (err) {
         // Manueller Abbruch: still nach idle (bereits durch abbrechen() gesetzt) — kein Fehler/Metrik.
