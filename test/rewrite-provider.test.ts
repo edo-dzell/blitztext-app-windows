@@ -177,4 +177,52 @@ describe('createCloudRewriteProvider', () => {
       provider.rewrite({ system: 's', user: 'u' }, { model: 'm', temperature: 0.3 })
     ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
+
+  // --- A1.0: Fehler additiv anreichern (für die Fehler-Art-Klassifikation) ---
+
+  it('reichert Nicht-200-Fehler mit .status an', async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: { message: 'Invalid model' } }), {
+        status: 400
+      })) as unknown as typeof fetch
+    const provider = createCloudRewriteProvider({ getApiKey: async () => 'sk', fetchFn })
+
+    await expect(
+      provider.rewrite({ system: 's', user: 'u' }, { model: 'm', temperature: 0.3 })
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('markiert Transport-Fehler mit .transport=true', async () => {
+    const fetchFn = (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    const provider = createCloudRewriteProvider({ getApiKey: async () => 'sk', fetchFn })
+
+    await expect(
+      provider.rewrite({ system: 's', user: 'u' }, { model: 'm', temperature: 0.3 })
+    ).rejects.toMatchObject({ transport: true })
+  })
+
+  // --- L1: key-loser lokaler Anbieter ---
+
+  it('key-los: wirft nicht und sendet keinen Authorization-Header (Content-Type bleibt)', async () => {
+    let init: RequestInit | undefined
+    const fetchFn = (async (_u: string, i: RequestInit) => {
+      init = i
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'lokal' } }] }), {
+        status: 200
+      })
+    }) as unknown as typeof fetch
+    const provider = createCloudRewriteProvider({
+      getApiKey: async () => null,
+      erlaubeOhneKey: () => true,
+      fetchFn
+    })
+
+    const r = await provider.rewrite({ system: 's', user: 'u' }, { model: 'm', temperature: 0.3 })
+    expect(r.text).toBe('lokal')
+    const headers = init?.headers as Record<string, string>
+    expect(headers?.Authorization).toBeUndefined()
+    expect(headers?.['Content-Type']).toBe('application/json')
+  })
 })

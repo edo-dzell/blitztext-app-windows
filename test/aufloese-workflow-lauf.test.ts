@@ -110,19 +110,19 @@ describe('aufloeseWorkflowLauf', () => {
     expect(calm.chatModell).toBe('gpt-4o')
   })
 
-  // --- #19: Pro-Workflow-Override für Sprache + ASR-Modell ---
-  it('Workflow-Override für Sprache und ASR-Modell schlägt die Vererbung', () => {
+  // --- A6/D9: Pro-Workflow-ASR-Override entfernt — das ASR-Modell kommt IMMER vom Anbieter ---
+  it('Sprach-Override wirkt; das ASR-Modell kommt immer vom Anbieter (Override entfernt)', () => {
     const lauf = aufloeseWorkflowLauf(
-      { anbieterId: '', model: '', temperature: 0.3, language: 'en', asrModell: 'gpt-4o-transcribe' },
+      { anbieterId: '', model: '', temperature: 0.3, language: 'en' },
       { anbieter: [OPENAI], standardAnbieterId: 'openai', language: 'de' }
     )
     expect(lauf.language).toBe('en')
-    expect(lauf.asrModell).toBe('gpt-4o-transcribe')
+    expect(lauf.asrModell).toBe('whisper-1') // Anbieter-ASR, nicht (mehr) überschreibbar
   })
 
-  it('leere Overrides erben (Sprache global, ASR vom Anbieter)', () => {
+  it('leere Sprache erbt global; ASR vom Anbieter', () => {
     const lauf = aufloeseWorkflowLauf(
-      { anbieterId: '', model: '', temperature: 0.3, language: '', asrModell: '' },
+      { anbieterId: '', model: '', temperature: 0.3, language: '' },
       { anbieter: [OPENAI], standardAnbieterId: 'openai', language: 'de' }
     )
     expect(lauf.language).toBe('de')

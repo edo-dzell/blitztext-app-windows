@@ -33,7 +33,7 @@ export function createProtokoll(deps: {
             : undefined
         },
         jetztMs
-      )
+      ).catch((err) => console.error('Statistik schreiben fehlgeschlagen (ignoriert):', err))
       // Verlauf (Text) — der Store entscheidet selbst per aktiv()-Gate, ob er schreibt. Awaiten +
       // zurückgeben, damit der Aufrufer das history:changed-Event erst nach erfolgtem Schreiben feuert.
       return deps.verlauf.aufzeichnen({

@@ -192,14 +192,15 @@ export default function EinstellungenView({ settings, speichern }: Props) {
         <Card>
           <CardContent className="flex items-center justify-between gap-4 p-5">
             <div>
-              <p className="text-sm font-medium">Sicherer Lokaler Modus</p>
+              <p className="text-sm font-medium">Verlauf-Sperre</p>
               <p className="text-xs text-muted-foreground">
-                Erzwingt den Verlauf AUS, egal was unter „Verlauf" eingestellt ist.
+                Erzwingt den Verlauf AUS, egal was unter „Verlauf" eingestellt ist. Audio und Text werden
+                weiterhin an den Anbieter gesendet.
               </p>
             </div>
             <Switch
-              checked={entwurf.sichererLokalerModus}
-              onCheckedChange={(v) => setEntwurf({ ...entwurf, sichererLokalerModus: v })}
+              checked={entwurf.verlaufGesperrt}
+              onCheckedChange={(v) => setEntwurf({ ...entwurf, verlaufGesperrt: v })}
             />
           </CardContent>
         </Card>

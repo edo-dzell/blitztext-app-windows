@@ -2,6 +2,8 @@
 // fetch + Key injizierbar → ohne echtes Netz testbar. Treue Portierung von LLMService.swift.
 // Modell/Temperatur kommen vom Aufrufer (gpt-4o-mini@0.3 improve/emoji, gpt-4o@0.4 calm).
 
+import { leseFehlerDetail, type AnbieterFehler } from '@main/workflow/fehler-klassifikation'
+
 export interface RewriteErgebnis {
   text: string
   /** Token-Verbrauch laut Anbieter (für die Kostenstatistik, Strang D); fehlt, wenn nicht geliefert. */
@@ -21,6 +23,8 @@ export function createCloudRewriteProvider(deps: {
   getApiKey: () => Promise<string | null>
   /** OpenAI-kompatible Base-URL OHNE Trailing-Slash; ohne Angabe = OpenAI (v1-Verhalten). */
   getBaseUrl?: () => string
+  /** L1: erlaubt einen Lauf OHNE Key (key-loser lokaler Anbieter) → kein Authorization-Header. */
+  erlaubeOhneKey?: () => boolean
   fetchFn?: typeof fetch
 }): RewriteProvider {
   const fetchFn = deps.fetchFn ?? fetch
@@ -29,16 +33,17 @@ export function createCloudRewriteProvider(deps: {
   return {
     async rewrite(input, opts) {
       const apiKey = await deps.getApiKey()
-      if (!apiKey) throw new Error('OpenAI API-Key fehlt. Bitte in den Einstellungen hinterlegen.')
+      if (!apiKey && !deps.erlaubeOhneKey?.()) {
+        throw new Error('OpenAI API-Key fehlt. Bitte in den Einstellungen hinterlegen.')
+      }
 
       let response: Response
       try {
         response = await fetchFn(`${getBaseUrl()}/chat/completions`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-          },
+          headers: apiKey
+            ? { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+            : { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: opts.model,
             temperature: opts.temperature,
@@ -55,10 +60,12 @@ export function createCloudRewriteProvider(deps: {
           throw cause
         }
         // Transport-Fehler (DNS/offline/Verbindung) — klare deutsche Meldung statt roher TypeError.
-        throw new Error(
+        const fehler = new Error(
           'Netzwerkfehler: Keine Verbindung zu OpenAI. Bitte Internetverbindung prüfen.',
           { cause }
-        )
+        ) as AnbieterFehler
+        fehler.transport = true // Transport-/Verbindungsfehler → Fehler-Art netzwerk
+        throw fehler
       }
 
       const raw = await response.text()
@@ -68,14 +75,25 @@ export function createCloudRewriteProvider(deps: {
         // ODER FLACH (Mistral: message; manche: detail) — beide Formen lesen, sonst geht z. B. die
         // „Invalid model"-Ursache bei Mistral/Groq verloren und es bliebe nur „Status 400".
         let message = `KI-Fehler: Status ${response.status}`
+        let providerCode: string | undefined
         try {
-          const parsed = JSON.parse(raw) as { error?: { message?: string }; message?: string; detail?: string }
-          const detail = parsed.error?.message ?? parsed.message ?? parsed.detail
+          const parsed = JSON.parse(raw) as {
+            error?: { message?: string; code?: string; type?: string }
+            message?: string
+            detail?: unknown
+            code?: string
+            type?: string
+          }
+          const detail = leseFehlerDetail(parsed)
           if (detail) message = `KI-Fehler: ${detail}`
+          providerCode = parsed.error?.code ?? parsed.error?.type ?? parsed.code ?? parsed.type
         } catch {
           // kein JSON-Fehlerkörper
         }
-        throw new Error(message)
+        const fehler = new Error(message) as AnbieterFehler
+        fehler.status = response.status
+        if (providerCode) fehler.providerCode = providerCode
+        throw fehler
       }
 
       let content = ''

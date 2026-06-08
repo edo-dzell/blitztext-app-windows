@@ -39,8 +39,9 @@ export interface BlitztextSettings {
   workflows: WorkflowDefinition[]
   /** Verlauf aufzeichnen? Opt-in, Standard AUS (ADR-0009, sensibler Text). */
   verlaufAktiv: boolean
-  /** Sicherer Lokaler Modus: erzwingt Verlauf AUS, egal was verlaufAktiv sagt. */
-  sichererLokalerModus: boolean
+  /** Verlauf-Sperre (D5): erzwingt Verlauf AUS, egal was verlaufAktiv sagt. Macht NICHTS lokal —
+   *  Audio/Text gehen weiter an den Anbieter (ADR-0016). Vormals „sichererLokalerModus" (migriert). */
+  verlaufGesperrt: boolean
   /** Fokus-Rückkehr vor dem Einfügen (ADR-0011, F-1). Default an; nur bei echtem Drift aktiv. */
   fokusRueckkehr: boolean
   /** Farbschema: dem System folgen oder manuell. Default 'system'. */
@@ -88,7 +89,7 @@ export function defaultSettings(): BlitztextSettings {
     standardAnbieterId: DEFAULT_ANBIETER.id,
     workflows: BUILTIN_WORKFLOWS.map((w) => ({ ...w })),
     verlaufAktiv: false,
-    sichererLokalerModus: false,
+    verlaufGesperrt: false,
     fokusRueckkehr: true,
     theme: 'system',
     preisOverrides: {},
@@ -171,7 +172,6 @@ function parseWorkflow(raw: unknown): WorkflowDefinition | null {
     anbieterId: typeof o.anbieterId === 'string' ? o.anbieterId : '',
     language: typeof o.language === 'string' ? o.language : '',
     ausgabeSprache: typeof o.ausgabeSprache === 'string' ? o.ausgabeSprache : '',
-    asrModell: typeof o.asrModell === 'string' ? o.asrModell : '',
     ...(['formal', 'neutral', 'casual'].includes(o.tone as string)
       ? { tone: o.tone as WorkflowDefinition['tone'] }
       : {}),
@@ -219,7 +219,8 @@ function parseEinAnbieter(raw: unknown): AnbieterKonfig | null {
     label: strOder(o.label, descriptor?.label ?? o.id),
     baseUrl: strOder(o.baseUrl, descriptor?.baseUrl ?? DEFAULT_ANBIETER.baseUrl),
     asrModell: strOder(o.asrModell, DEFAULT_ANBIETER.asrModell),
-    chatModell: strOder(o.chatModell, DEFAULT_ANBIETER.chatModell)
+    chatModell: strOder(o.chatModell, DEFAULT_ANBIETER.chatModell),
+    ...(o.keinKeyNoetig === true ? { keinKeyNoetig: true as const } : {})
   }
 }
 
@@ -294,7 +295,8 @@ function parseSettings(raw: unknown): BlitztextSettings {
     ...parseAnbieter(o),
     workflows,
     verlaufAktiv: o.verlaufAktiv === true,
-    sichererLokalerModus: o.sichererLokalerModus === true,
+    // A7-Migration: alten Schlüssel dauerhaft mit übernehmen (kein versioniertes Schema), nicht zurückschreiben.
+    verlaufGesperrt: o.verlaufGesperrt === true || o.sichererLokalerModus === true,
     fokusRueckkehr: o.fokusRueckkehr !== false, // Default an
     theme: (['system', 'hell', 'dunkel'] as const).includes(o.theme as never)
       ? (o.theme as BlitztextSettings['theme'])

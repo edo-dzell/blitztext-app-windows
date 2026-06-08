@@ -14,6 +14,8 @@ export function pillenStatus(phase: WorkflowPhase): PillenStatus {
       return { sichtbar: true, label: '⏳ Transkribiere …' }
     case 'umschreiben':
       return { sichtbar: true, label: '✍️ Schreibe um …' }
+    case 'teilErfolg':
+      return { sichtbar: true, label: '📋 Rohtext in Zwischenablage' }
     case 'fehler':
       return { sichtbar: true, label: `⚠️ ${phase.message}` }
     case 'idle':

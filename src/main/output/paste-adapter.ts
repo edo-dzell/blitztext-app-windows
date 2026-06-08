@@ -15,6 +15,7 @@ import {
 } from '@main/output/paste-service'
 import { winPastePfad } from '@main/output/win-paste-path'
 import type { Ausgabe } from '@main/session/sitzung'
+import type { FehlerMeldung } from '@main/session/fehler-meldung'
 
 // macOS nutzt 1,5 s Delay vor dem Restore (restorePasteboardIfCurrent); RESEARCH §4.
 const RESTORE_DELAY_MS = 1500
@@ -25,6 +26,8 @@ export interface AusgabeFenster {
   zeigeEinstellungen(): void
   /** „In Zwischenablage kopiert — bitte mit Strg+V einfügen." */
   zeigeManuellenHinweis(): void
+  /** Einen fehlgeschlagenen Lauf melden (Notification; bei aktion 'einstellungen' mit Sprung). */
+  melde(fehler: FehlerMeldung): void
 }
 
 export interface PasteAusgabeDeps {
@@ -101,9 +104,13 @@ export function createPasteAusgabe(deps: PasteAusgabeDeps): Ausgabe {
           setTimeout(() => ergebnis.wiederherstellen(), delayMs)
         }
         // Bei Total-Fehlschlag bleibt der Text bewusst in der Zwischenablage (Hinweis kam schon).
-      })()
+      })().catch((err) => console.error('Einfügen fehlgeschlagen (ignoriert):', err))
     },
     anzeigen: (text) => deps.fenster.anzeigen(text),
-    zeigeEinstellungen: () => deps.fenster.zeigeEinstellungen()
+    zeigeEinstellungen: () => deps.fenster.zeigeEinstellungen(),
+    melde: (fehler) => deps.fenster.melde(fehler),
+    // Teil-Erfolg: Rohtext in die Zwischenablage legen und liegen lassen (kein Restore — der Nutzer fügt
+    // selbst mit Strg+V ein). Bewusst KEIN Auto-Paste.
+    inZwischenablage: (text) => zwischenablage.schreib(text)
   }
 }

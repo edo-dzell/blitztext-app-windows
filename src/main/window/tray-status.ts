@@ -17,6 +17,8 @@ export function phaseTooltip(phase: WorkflowPhase): string {
       return 'Blitztext — Schreibe um …'
     case 'fertig':
       return 'Blitztext — Fertig'
+    case 'teilErfolg':
+      return 'Blitztext — Rohtext in Zwischenablage'
     case 'fehler':
       return `Blitztext — Fehler: ${phase.message}`
   }

@@ -37,8 +37,6 @@ export interface WorkflowDefinition {
   language?: string
   /** Ausgabesprache fürs Umschreiben (R1). Fehlt/'' = keine Vorgabe (Sprache der Eingabe). */
   ausgabeSprache?: string
-  /** ASR-Modell pro Workflow (v0.2.4). Fehlt/'' = erbt das ASR-Modell des Anbieters. */
-  asrModell?: string
   /** Ton pro Workflow (v0.2.7); fehlt/'' = erbt global. Wirkt auf berechnete Umschreibe-Workflows. */
   tone?: 'formal' | 'neutral' | 'casual'
   /** Emoji-Dichte pro Workflow (v0.2.7); fehlt/'' = erbt global. 'aus' = gar keine Emojis. */
@@ -186,7 +184,7 @@ export function getWorkflow(
 
 // --- P3: „Auf Auslieferung zurücksetzen" (nur VERHALTEN; Name/Hotkey/Anbieter/Sprache bleiben). ---
 // Genau die im Sparring (Punkt 3) festgelegten Verhaltensfelder. NICHT id/label/summary/builtin/
-// promptHistorie und bewusst NICHT anbieterId/language/asrModell (= Nutzer-Konfiguration, bleibt).
+// promptHistorie und bewusst NICHT anbieterId/language (= Nutzer-Konfiguration, bleibt).
 export const WORKFLOW_VERHALTENS_FELDER = [
   'rewrites',
   'promptModus',

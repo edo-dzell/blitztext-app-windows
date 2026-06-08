@@ -30,6 +30,7 @@ import {
 import { createStatsFile } from '@main/stats/stats-file'
 import { starteUiohookQuelle } from '@main/hotkey/uiohook-source'
 import { spiegleStatus } from '@main/window/tray-status'
+import { pillenPosition } from '@main/window/pillen-position'
 import { pillenStatus } from '@main/window/pill-status'
 import { istAbbruchOderTimeout } from '@main/session/abbruch-guard'
 import { createSettingsStore, type BlitztextSettings, type ApiKeyStatus } from '@main/settings/store'
@@ -42,6 +43,26 @@ process.on('unhandledRejection', (grund) => {
   if (istAbbruchOderTimeout(grund)) return
   throw grund
 })
+
+// Tray-Dauertool (D4/A5): ein unerwarteter Bug soll NICHT lautlos verschwinden, aber auch keine
+// Datenverlust-Schleife auslösen → surface (Log + Hinweis), dann kontrolliert beenden. KEIN Auto-Neustart
+// (geparkt). Es werden NUR Name/Message geloggt — nie API-Keys/Objekt-Innereien (Secret-Redaction).
+function meldeFatalUndBeende(grund: unknown): void {
+  const text = grund instanceof Error ? `${grund.name}: ${grund.message}` : String(grund)
+  console.error('Schwerer Fehler — Blitztext wird beendet:', text)
+  try {
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Blitztext',
+        body: 'Blitztext ist auf einen Fehler gestoßen und muss neu gestartet werden.'
+      }).show()
+    }
+  } catch {
+    // Notification im Fehlerfall best effort
+  }
+  app.exit(1)
+}
+process.on('uncaughtException', meldeFatalUndBeende)
 
 let tray: Tray | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -173,9 +194,10 @@ function createPillWindow(): BrowserWindow {
 // Unten mittig über der Taskleiste, auf dem Display unter dem Cursor (dort wurde der Hotkey ausgelöst).
 function positioniertePille(window: BrowserWindow): void {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  const { x, y, width, height } = display.workArea
   const [pw, ph] = window.getSize()
-  window.setBounds({ x: x + Math.round((width - pw) / 2), y: y + height - ph - 12, width: pw, height: ph })
+  // A8: Wunschposition (unten zentriert) + harter Clamp in die sichtbaren Bounds gegen off-screen.
+  const { x, y } = pillenPosition(display.workArea, { width: pw, height: ph })
+  window.setBounds({ x, y, width: pw, height: ph })
 }
 
 function createTray(): void {
@@ -203,8 +225,11 @@ function baueTrayMenu(comp: MainComposition): void {
   )
 }
 
-function benachrichtige(body: string): void {
-  if (Notification.isSupported()) new Notification({ title: 'Blitztext', body }).show()
+function benachrichtige(titel: string, koerper: string, onClick?: () => void): void {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title: titel, body: koerper })
+  if (onClick) n.on('click', onClick)
+  n.show()
 }
 
 // P1: apiKeyStatus[anbieterId] setzen (status) oder entfernen (null) — frisch laden, NUR diesen Eintrag
@@ -319,10 +344,18 @@ if (!gotTheLock) {
       fenster: {
         // Manuelle Auslösequelle: v1-minimal als Notification (vollständige Workflow-Anzeige + manueller
         // Tray-Start brauchen Aufnahme-UI → zurückgestellt; Kernpfad ist der Hotkey).
-        anzeigen: (text) => benachrichtige(text),
+        anzeigen: (text) => benachrichtige('Blitztext', text),
         zeigeEinstellungen: showSettings,
         zeigeManuellenHinweis: () =>
-          benachrichtige('In Zwischenablage kopiert — bitte mit Strg+V einfügen.')
+          benachrichtige('Blitztext', 'In Zwischenablage kopiert — bitte mit Strg+V einfügen.'),
+        // Lauf-Fehler/Teil-Erfolg: Notification (OS-announced = auch barrierefrei); bei 'einstellungen'
+        // führt der Klick in die Einstellungen.
+        melde: (fehler) =>
+          benachrichtige(
+            fehler.titel,
+            fehler.koerper,
+            fehler.aktion === 'einstellungen' ? showSettings : undefined
+          )
       }
     })
 
@@ -348,7 +381,12 @@ if (!gotTheLock) {
     // Runner-Phase → Tray-Tooltip + fokusfreie Status-Pille (stiehlt keinen Fokus, ADR-0007).
     comp.sitzung.onStatus = (phase) => {
       // Nach Lauf-Ende ausstehende Settings-Änderungen übernehmen (während eines Laufs gespeichert).
-      if (phase.status === 'fertig' || phase.status === 'fehler' || phase.status === 'idle') {
+      if (
+        phase.status === 'fertig' ||
+        phase.status === 'teilErfolg' ||
+        phase.status === 'fehler' ||
+        phase.status === 'idle'
+      ) {
         comp.wendeAusstehendeAn()
       }
       baueTrayMenu(comp) // „Abbrechen"-Aktivzustand nachziehen
@@ -363,8 +401,8 @@ if (!gotTheLock) {
         pillWindow.webContents.send('pill:status', s.label)
         positioniertePille(pillWindow)
         pillWindow.showInactive()
-        // Fehler bleibt sonst stehen (kein weiteres onStatus bis zum nächsten Lauf) → auto-ausblenden.
-        if (phase.status === 'fehler') {
+        // Fehler/Teil-Erfolg bleiben sonst stehen (kein weiteres onStatus bis zum nächsten Lauf) → auto-ausblenden.
+        if (phase.status === 'fehler' || phase.status === 'teilErfolg') {
           pillFehlerTimer = setTimeout(() => pillWindow?.hide(), 4000)
         }
       } else {

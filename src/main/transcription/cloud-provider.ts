@@ -6,6 +6,7 @@
 // exakt v1: OpenAI/whisper-1 → byte-identische URL + response_format=text.
 
 import { asrUnterstuetztTextFormat } from '@shared/providers'
+import { leseFehlerDetail, type AnbieterFehler } from '@main/workflow/fehler-klassifikation'
 
 export interface TranscribeOptions {
   language?: string
@@ -33,6 +34,8 @@ export function createCloudTranscriptionProvider(deps: {
   getApiKey: () => Promise<string | null>
   /** Aktive Provider-Config; ohne Angabe = OpenAI/whisper-1 (v1-Verhalten). */
   getConfig?: () => TranscriptionConfig
+  /** L1: erlaubt einen Lauf OHNE Key (key-loser lokaler Anbieter) → kein Authorization-Header. */
+  erlaubeOhneKey?: () => boolean
   fetchFn?: typeof fetch
 }): TranscriptionProvider {
   const fetchFn = deps.fetchFn ?? fetch
@@ -41,7 +44,9 @@ export function createCloudTranscriptionProvider(deps: {
   return {
     async transcribe(audio, options = {}) {
       const apiKey = await deps.getApiKey()
-      if (!apiKey) throw new Error('OpenAI API-Key fehlt. Bitte in den Einstellungen hinterlegen.')
+      if (!apiKey && !deps.erlaubeOhneKey?.()) {
+        throw new Error('OpenAI API-Key fehlt. Bitte in den Einstellungen hinterlegen.')
+      }
 
       const { baseUrl, model } = getConfig()
       const textFormat = asrUnterstuetztTextFormat(model)
@@ -62,7 +67,7 @@ export function createCloudTranscriptionProvider(deps: {
       try {
         response = await fetchFn(`${baseUrl}/audio/transcriptions`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
           body: form,
           signal: options.signal
         })
@@ -72,24 +77,37 @@ export function createCloudTranscriptionProvider(deps: {
           throw cause
         }
         // Transport-Fehler (DNS/offline/Verbindung) — klare deutsche Meldung statt roher TypeError.
-        throw new Error(
+        const fehler = new Error(
           'Netzwerkfehler: Keine Verbindung zum Anbieter. Bitte Internetverbindung prüfen.',
           { cause }
-        )
+        ) as AnbieterFehler
+        fehler.transport = true // Transport-/Verbindungsfehler → Fehler-Art netzwerk
+        throw fehler
       }
 
       const raw = await response.text()
       if (response.status !== 200) {
-        // Fehler-Body verschachtelt (OpenAI: error.message) ODER flach (Mistral: message) — beide lesen.
+        // Fehler-Body verschachtelt (OpenAI: error.message) ODER flach (Mistral: message/detail) — beide lesen.
         let message = `Anbieter-Fehler: Status ${response.status}`
+        let providerCode: string | undefined
         try {
-          const parsed = JSON.parse(raw) as { error?: { message?: string }; message?: string; detail?: string }
-          const detail = parsed.error?.message ?? parsed.message ?? parsed.detail
+          const parsed = JSON.parse(raw) as {
+            error?: { message?: string; code?: string; type?: string }
+            message?: string
+            detail?: unknown
+            code?: string
+            type?: string
+          }
+          const detail = leseFehlerDetail(parsed)
           if (detail) message = `Anbieter-Fehler: ${detail}`
+          providerCode = parsed.error?.code ?? parsed.error?.type ?? parsed.code ?? parsed.type
         } catch {
           // kein JSON-Fehlerkörper — Status-Meldung bleibt
         }
-        throw new Error(message)
+        const fehler = new Error(message) as AnbieterFehler
+        fehler.status = response.status
+        if (providerCode) fehler.providerCode = providerCode
+        throw fehler
       }
 
       if (textFormat) return raw.trim()

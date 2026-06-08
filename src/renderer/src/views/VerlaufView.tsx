@@ -20,7 +20,7 @@ export default function VerlaufView({ settings, speichern }: Props) {
   const [eintraege, setEintraege] = useState<VerlaufEintrag[]>([])
   const [auswahl, setAuswahl] = useState<string | null>(null)
   const [neuesteZuerst, setNeuesteZuerst] = useState(true)
-  const gesperrt = settings.sichererLokalerModus
+  const gesperrt = settings.verlaufGesperrt
   const bestaetige = useBestaetigung()
   const zeige = useHinweis()
 
@@ -33,7 +33,7 @@ export default function VerlaufView({ settings, speichern }: Props) {
 
   useEffect(() => {
     void laden()
-  }, [settings.verlaufAktiv, settings.sichererLokalerModus])
+  }, [settings.verlaufAktiv, settings.verlaufGesperrt])
 
   // P5b: bei neuem Eintrag automatisch neu laden (Push-Event) — ersetzt den früheren focus-Reload
   // (kein Doppel-Load). Die Abmelde-Closure aus dem Preload räumt StrictMode-sicher auf.

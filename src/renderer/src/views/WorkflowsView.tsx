@@ -10,7 +10,9 @@ import {
   historieNachSpeichern,
   type WorkflowDefinition
 } from '@shared/workflows'
-// REINE Logik aus @main (framework-unabhängig, vom Renderer-Build via @main-Alias gebündelt).
+// REINE Logik aus @main (framework-unabhängig, vom Renderer-Build via @main-Alias gebündelt). Bewusste,
+// einzige Ausnahme zur Architektur-Lint-Regel (electron.vite.config erlaubt diesen Wert-Import, R2/#10).
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import { berechneterPrompt, wandleAufStatisch, type RewriteSettings } from '@main/rewrite/prompt-builder'
 import { modelleFuerVorlage } from '@shared/providers'
 import type { AnbieterKonfig } from '@shared/anbieter'

@@ -172,4 +172,57 @@ describe('createCloudTranscriptionProvider', () => {
 
     await expect(provider.transcribe(audioBlob())).rejects.toMatchObject({ name: 'TimeoutError' })
   })
+
+  // --- A1.0: Fehler additiv anreichern (für die Fehler-Art-Klassifikation) ---
+
+  it('reichert Nicht-200-Fehler mit .status und providerCode an', async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: { message: 'Quota', code: 'insufficient_quota' } }), {
+        status: 429
+      })) as unknown as typeof fetch
+    const provider = createCloudTranscriptionProvider({ getApiKey: async () => 'sk', fetchFn })
+
+    await expect(provider.transcribe(audioBlob())).rejects.toMatchObject({
+      status: 429,
+      providerCode: 'insufficient_quota'
+    })
+  })
+
+  it('markiert Transport-Fehler mit .transport=true', async () => {
+    const fetchFn = (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    const provider = createCloudTranscriptionProvider({ getApiKey: async () => 'sk', fetchFn })
+
+    await expect(provider.transcribe(audioBlob())).rejects.toMatchObject({ transport: true })
+  })
+
+  it('liest nicht-String-detail typsicher (kein [object Object])', async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ detail: [{ msg: 'bad input' }] }), {
+        status: 422
+      })) as unknown as typeof fetch
+    const provider = createCloudTranscriptionProvider({ getApiKey: async () => 'sk', fetchFn })
+
+    await expect(provider.transcribe(audioBlob())).rejects.toThrow(/bad input/)
+  })
+
+  // --- L1/L2: key-loser lokaler Anbieter (z. B. whisper.cpp/Speaches auf localhost) ---
+
+  it('key-los: wirft nicht und sendet keinen Authorization-Header', async () => {
+    let init: RequestInit | undefined
+    const fetchFn = (async (_u: string, i: RequestInit) => {
+      init = i
+      return new Response('lokal ok', { status: 200 })
+    }) as unknown as typeof fetch
+    const provider = createCloudTranscriptionProvider({
+      getApiKey: async () => null,
+      erlaubeOhneKey: () => true,
+      getConfig: () => ({ baseUrl: 'http://localhost:8000/v1', model: 'whisper-1' }),
+      fetchFn
+    })
+
+    expect(await provider.transcribe(audioBlob())).toBe('lokal ok')
+    expect((init?.headers as Record<string, string>)?.Authorization).toBeUndefined()
+  })
 })

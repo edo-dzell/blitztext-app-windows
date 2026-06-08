@@ -7,6 +7,7 @@ import {
   type ReactNode
 } from 'react'
 import { Button } from '@/components/ui/button'
+import { enterDarfBestaetigen } from '@/lib/dialog-enter'
 
 // Themed Bestätigungs-Dialog (statt nativem window.confirm) — für ALLE destruktiven Aktionen, damit
 // nichts versehentlich gelöscht wird. Nutzung: const bestaetige = useBestaetigung(); if (await
@@ -51,7 +52,9 @@ export function BestaetigungsProvider({ children }: { children: ReactNode }) {
     if (!state) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') schliesse(false)
-      if (e.key === 'Enter') schliesse(true)
+      // A9: destruktive Dialoge NICHT per globalem Enter bestätigen (verhindert versehentliches Löschen);
+      // harmlose Dialoge behalten Enter-zum-Bestätigen.
+      if (e.key === 'Enter' && enterDarfBestaetigen(state.o.gefahr === true)) schliesse(true)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)

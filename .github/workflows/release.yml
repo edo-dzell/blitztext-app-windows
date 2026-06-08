@@ -1,9 +1,7 @@
-# Baut bei einem Versions-Tag (z. B. v0.3.2) eine EINZELNE portable Windows-.exe und hängt sie an ein
-# GitHub-Release. Läuft auf windows-latest → das portable-Target baut nativ OHNE wine. Auch manuell
-# auslösbar (workflow_dispatch) für einen Testlauf ohne Tag.
-#
-# Hintergrund: lokal baut `npm run package:win` ein wine-freies ZIP (Linux/WSL, ADR-0006). Eine einzelne
-# .exe (portable-Target) braucht auf Linux wine — daher hier auf einem echten Windows-Runner.
+# Baut bei einem Versions-Tag (z. B. v0.4.0) eine portable Windows-.exe und hängt sie an ein GitHub-Release.
+# A10/A11 (Persona-Review): ein vorgelagerter test-Job (typecheck + tests) GATET den Build — kein Release
+# ohne grüne Tests. Bei Tag-Push wird zusätzlich die package.json-Version gegen den Tag geprüft, SHA256-
+# Checksummen erzeugt und eine Build-Provenance attestiert (Vertrauens-Hygiene OHNE Code-Signing, ADR-0017).
 
 name: Release (Windows portable)
 
@@ -13,30 +11,53 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write            # nötig, damit der Job ein Release anlegen darf
-
-env:
-  # Node-20-Actions (checkout/setup-node/upload-artifact) werden ab 16.06.2026 zwangsweise auf Node 24
-  # migriert → jetzt opt-in, um die Deprecation-Warnung loszuwerden (GitHub-Hinweis). Major-Tags der
-  # Actions bei Verfügbarkeit (v5) anheben.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  contents: write
 
 jobs:
-  build:
-    runs-on: windows-latest
+  # Gate (HEXA-1): macht die „Tests grün"-Disziplin maschinell. Läuft auf ubuntu (vitest = headless node).
+  test:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint (Architektur-Regel @main im Renderer)
+        run: npm run lint
+      - name: Tests
+        run: npm test
 
+  build:
+    needs: test # ohne grünes Gate kein Build (HEXA-1)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write # für die Build-Provenance-Attestation (A11)
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
       - name: Abhängigkeiten installieren
         run: npm ci
 
-      # win-paste.exe (Win32-Helfer, native/win-paste/win-paste.c) mit MinGW kompilieren — entspricht
-      # native/win-paste/build.sh, nur auf Windows. Die .exe ist gitignored (Bauartefakt) → hier erzeugt.
+      # Tag/Version-Konsistenz (A10): package.json-Version muss zum Release-Tag passen (nur bei Tag-Push).
+      - name: Tag/Version prüfen
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zu package.json ($PKG)"; exit 1
+          fi
+
+      # win-paste.exe (Win32-Helfer) mit MinGW kompilieren — entspricht native/win-paste/build.sh, auf Windows.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -50,25 +71,39 @@ jobs:
       - name: App-Bundle bauen (electron-vite → out/)
         run: npm run build
 
-      # Einzelne portable .exe. --win portable überschreibt das zip-Target aus electron-builder.yml
-      # nur für diesen CI-Lauf. npmRebuild:false + uiohook-Prebuilds → kein nativer Rebuild.
       - name: Portable .exe paketieren
         run: npx electron-builder --win portable
+
+      # A11: SHA256-Checksummen je Artefakt (bash + sha256sum, kein certutil/CRLF).
+      - name: SHA256-Checksummen erzeugen
+        shell: bash
+        run: |
+          cd release
+          sha256sum *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # A11: Build-Provenance attestieren (verifizierbar via `gh attestation verify`). Kein Code-Signing.
+      - name: Build-Provenance attestieren
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'release/*.exe'
 
       - name: Artefakt hochladen (immer, auch bei manuellem Lauf)
         uses: actions/upload-artifact@v4
         with:
           name: Blitztext-windows-portable
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
 
-      # Bei einem Tag-Push zusätzlich ein GitHub-Release mit der .exe als Download-Asset.
+      # Bei einem Tag-Push zusätzlich ein GitHub-Release mit .exe + Checksummen.
       - name: Release veröffentlichen (nur bei Tag)
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/*.exe \
+          gh release create "$GITHUB_REF_NAME" release/*.exe release/SHA256SUMS.txt \
             --title "$GITHUB_REF_NAME" \
-            --notes "Portable Windows-Build (unsigniert). Beim ersten Start kann Windows SmartScreen einen Hinweis zeigen — über „Weitere Informationen“ → „Trotzdem ausführen“."
+            --notes "Portable Windows-Build (unsigniert). **Vor dem Start die Integrität prüfen:** \`sha256sum -c SHA256SUMS.txt\` (oder PowerShell \`Get-FileHash blitztext.exe -Algorithm SHA256\`). Eine Build-Provenance-Attestation ist verfügbar (\`gh attestation verify\`). Hinweis: Provenance ist KEIN Code-Signing — Windows SmartScreen kann beim ersten Start weiterhin einen Hinweis zeigen."

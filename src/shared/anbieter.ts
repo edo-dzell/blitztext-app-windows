@@ -14,6 +14,9 @@ export interface AnbieterKonfig {
   baseUrl: string
   asrModell: string
   chatModell: string
+  /** L1: lokaler/keyloser Anbieter (z. B. whisper.cpp/Speaches auf localhost) — kein API-Key nötig,
+   *  kein Authorization-Header. Fehlt/false = Key wie üblich erforderlich. */
+  keinKeyNoetig?: boolean
 }
 
 export interface LaufKontext {
@@ -29,8 +32,6 @@ export interface AufloesbarerWorkflow {
   temperature: number
   /** Override Sprache (v0.2.4); '' / fehlt = erbt global. */
   language?: string
-  /** Override ASR-Modell (v0.2.4); '' / fehlt = erbt vom Anbieter. */
-  asrModell?: string
 }
 
 export interface AufgeloesterLauf {
@@ -98,7 +99,9 @@ export function aufloeseWorkflowLauf(
   return {
     anbieter,
     baseUrl: anbieter.baseUrl,
-    asrModell: workflow.asrModell || anbieter.asrModell,
+    // A6/D9: KEIN Pro-Workflow-ASR-Override mehr — die Transkription nutzt ohnehin das Anbieter-ASR-Modell;
+    // so protokolliert der Verlauf ehrlich, was wirklich lief (ADR-0016).
+    asrModell: anbieter.asrModell,
     chatModell: aufgeloestesChatModell(workflow.model, anbieter),
     temperature: workflow.temperature,
     language: workflow.language || ctx.language

@@ -441,4 +441,87 @@ describe('createWorkflowRunner', () => {
 
     expect(cancelled).toBe(1)
   })
+
+  // --- A3: Teil-Erfolg (Rohtext nie verlieren) + A1-Klassifikation ---
+
+  it('Teil-Erfolg: Umschreib-Fehler bei vorhandenem Rohtext → teilErfolg (Rohtext erhalten), Metrik gesetzt', async () => {
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: { async transcribe() { return '  mein rohtext  ' } },
+        rewrite: { async rewrite() { throw new Error('KI-Fehler: kaputt') } }
+      })
+    )
+
+    runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toEqual({ status: 'teilErfolg', rohtext: 'mein rohtext', warnung: 'KI-Fehler: kaputt' })
+    expect(runner.letzteMetrik).toMatchObject({
+      rohtext: 'mein rohtext',
+      endtext: 'mein rohtext',
+      umgeschrieben: false
+    })
+  })
+
+  it('Transkriptions-Fehler (kein Rohtext) bleibt fehler; transport-Marker → art netzwerk', async () => {
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: {
+          async transcribe() {
+            throw Object.assign(new Error('Netzwerkfehler: weg'), { transport: true })
+          }
+        }
+      })
+    )
+
+    runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toMatchObject({ status: 'fehler', art: 'netzwerk' })
+  })
+
+  // --- A4: netzwerk-Retry (nur transient) ---
+
+  it('netzwerk-Retry: ein transienter Transport-Fehler wird wiederholt → fertig', async () => {
+    let n = 0
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: {
+          async transcribe() {
+            n++
+            if (n < 2) throw Object.assign(new Error('Netzwerkfehler'), { transport: true })
+            return 'endlich da'
+          }
+        },
+        sleep: async () => {}
+      })
+    )
+
+    runner.start({ def: def('transcribe'), chatModell: 'm' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toEqual({ status: 'fertig', text: 'endlich da' })
+    expect(n).toBe(2)
+  })
+
+  it('konfiguration-Fehler (401) wird NICHT wiederholt', async () => {
+    let n = 0
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: {
+          async transcribe() {
+            n++
+            throw Object.assign(new Error('Ungültiger Key'), { status: 401 })
+          }
+        },
+        sleep: async () => {}
+      })
+    )
+
+    runner.start({ def: def('transcribe'), chatModell: 'm' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toMatchObject({ status: 'fehler', art: 'konfiguration' })
+    expect(n).toBe(1)
+  })
 })

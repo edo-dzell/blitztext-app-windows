@@ -41,7 +41,7 @@ describe('createSettingsStore', () => {
       ],
       standardAnbieterId: 'groq',
       verlaufAktiv: true,
-      sichererLokalerModus: false,
+      verlaufGesperrt: false,
       fokusRueckkehr: true,
       theme: 'dunkel' as const,
       preisOverrides: { 'gpt-4o-mini': { inputPro1MUsd: 1 } },
@@ -60,8 +60,7 @@ describe('createSettingsStore', () => {
           temperature: 0,
           anbieterId: '',
           language: '',
-          ausgabeSprache: '',
-          asrModell: ''
+          ausgabeSprache: ''
         },
         {
           id: 'mein-flow',
@@ -75,8 +74,7 @@ describe('createSettingsStore', () => {
           temperature: 0.5,
           anbieterId: '',
           language: '',
-          ausgabeSprache: '',
-          asrModell: ''
+          ausgabeSprache: ''
         }
       ]
     }
@@ -162,6 +160,19 @@ describe('createSettingsStore', () => {
       asrModell: 'gpt-4o-mini-transcribe',
       chatModell: 'gpt-4o-mini'
     })
+  })
+
+  it('A7: migriert sichererLokalerModus → verlaufGesperrt und schreibt den alten Key nicht zurück', async () => {
+    const file = fakeFile(JSON.stringify({ sichererLokalerModus: true }))
+    const store = createSettingsStore({ file })
+
+    const loaded = await store.load()
+    expect(loaded.verlaufGesperrt).toBe(true)
+
+    await store.save(loaded)
+    const roh = await file.read()
+    expect(roh).toContain('verlaufGesperrt')
+    expect(roh).not.toContain('sichererLokalerModus')
   })
 
   it('ohne vorhandenes File liefert load die Defaults', async () => {

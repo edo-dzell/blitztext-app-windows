@@ -45,7 +45,13 @@ describe('createMainComposition', () => {
         stop: vi.fn(async () => ({ audio: new Blob(), durationSeconds: 0 })),
         discard: vi.fn()
       },
-      ausgabe: { einfügen: vi.fn(), anzeigen: vi.fn(), zeigeEinstellungen: vi.fn() },
+      ausgabe: {
+        einfügen: vi.fn(),
+        anzeigen: vi.fn(),
+        zeigeEinstellungen: vi.fn(),
+        melde: vi.fn(),
+        inZwischenablage: vi.fn()
+      },
       apiKeys: { has: async () => false, get: async () => null, set: async () => {}, clear: async () => {}, maske: async () => null },
       settingsFile: { read: async () => null, write: async () => {} },
       verlaufCipher: {
@@ -81,7 +87,13 @@ describe('createMainComposition', () => {
         stop: vi.fn(async () => ({ audio: new Blob(), durationSeconds: 0 })),
         discard: vi.fn()
       },
-      ausgabe: { einfügen: vi.fn(), anzeigen: vi.fn(), zeigeEinstellungen: vi.fn() },
+      ausgabe: {
+        einfügen: vi.fn(),
+        anzeigen: vi.fn(),
+        zeigeEinstellungen: vi.fn(),
+        melde: vi.fn(),
+        inZwischenablage: vi.fn()
+      },
       apiKeys: { has: async () => true, get: async () => 'sk', set: async () => {}, clear: async () => {}, maske: async () => null },
       settingsFile: { read: async () => null, write: async () => {} },
       verlaufCipher: {

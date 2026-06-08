@@ -18,4 +18,10 @@ describe('pillenStatus', () => {
     expect(s.sichtbar).toBe(true)
     expect(s.label).toContain('OpenAI-Fehler')
   })
+
+  it('zeigt Teil-Erfolg (Rohtext in Zwischenablage)', () => {
+    const s = pillenStatus({ status: 'teilErfolg', rohtext: 'x', warnung: 'w' })
+    expect(s.sichtbar).toBe(true)
+    expect(s.label).toContain('Zwischenablage')
+  })
 })

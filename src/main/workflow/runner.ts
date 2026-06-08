@@ -12,6 +12,8 @@ import type { TranscriptionProvider } from '@main/transcription/cloud-provider'
 import type { RewriteProvider } from '@main/rewrite/cloud-provider'
 import type { resolveSystemPrompt, RewriteSettings } from '@main/rewrite/prompt-builder'
 import { kapsleTranskript, entferneTranskriptMarken } from '@main/rewrite/prompt-builder'
+import { klassifiziere, type FehlerArt } from '@main/workflow/fehler-klassifikation'
+import { mitRetry } from '@main/workflow/retry'
 
 export interface RecordingResult {
   audio: Blob
@@ -44,6 +46,8 @@ export interface WorkflowRunnerDeps {
    * gibt eine Abbruchfunktion zurück. Ohne Angabe: 90 s via setTimeout. Im Test injizierbar.
    */
   starteWatchdog?: (onTimeout: () => void) => () => void
+  /** Backoff-Verzögerung zwischen netzwerk-Retries; injizierbar für Tests (Default echte Verzögerung). */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface RunInput {
@@ -71,11 +75,10 @@ export interface RunMetrik {
   umgeschrieben: boolean
 }
 
-// Art eines Fehlers — die zwei Ergebnisse, die der Runner wahrhaftig unterscheidet:
-// 'aufnahme' = nichts Brauchbares aufgenommen (zu kurz / Artefakt, ein Urteil des Runners);
-// 'anbieter' = ein Kollaborateur (Transkription/Umschreiben) hat geworfen.
-// Feinere Kategorien (netzwerk/konfiguration) kommen mit ihrem UI-Konsumenten (Tray/Renderer).
-export type FehlerArt = 'aufnahme' | 'anbieter'
+// Fehler-Art (CONTEXT.md) ist im fehler-klassifikation-Modul definiert (aufnahme | konfiguration |
+// netzwerk | anbieter) und wird hier re-exportiert — die Phase trägt `art: FehlerArt`. 'aufnahme' bleibt
+// ein Urteil des Runners (zu kurz/Artefakt); die übrigen bestimmt der Klassifizierer aus dem Anbieter-Fehler.
+export type { FehlerArt }
 
 export type WorkflowPhase =
   | { status: 'idle' }
@@ -83,6 +86,7 @@ export type WorkflowPhase =
   | { status: 'transkribieren' }
   | { status: 'umschreiben' }
   | { status: 'fertig'; text: string }
+  | { status: 'teilErfolg'; rohtext: string; warnung: string }
   | { status: 'fehler'; art: FehlerArt; message: string }
 
 export interface WorkflowRunner {
@@ -175,19 +179,39 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
         controller?.abort(new DOMException('Zeitüberschreitung beim Anbieter.', 'TimeoutError'))
       })
 
+      const signal = controller.signal
+      // Nur transiente netzwerk-Fehler wiederholen — nie Abbruch/Watchdog-Timeout (sonst Doppel-Audio,
+      // und der abgebrochene Controller ließe den nächsten Versuch ohnehin sofort scheitern).
+      const retrybar = (fehler: unknown): boolean => {
+        if (abgebrochen || istTimeout) return false
+        if (fehler instanceof Error && (fehler.name === 'AbortError' || fehler.name === 'TimeoutError')) {
+          return false
+        }
+        return klassifiziere(fehler, { istWatchdogTimeout: false }) === 'netzwerk'
+      }
+      const retryOpts = { versuche: 2, backoffMs: 300, retrybar, sleep: deps.sleep }
+
+      // Gemerkter Rohtext für den catch: ist er gesetzt, gelang die Transkription und nur das Umschreiben
+      // scheiterte → Teil-Erfolg (Rohtext retten) statt Totalverlust.
+      let letzterRohtext: string | null = null
       try {
         transition({ status: 'transkribieren' })
         // Eigennamen nur bei ausreichend langer Aufnahme mitschicken (≥ 0,9 s), wie im Original.
         const vocabularyHints = recording.durationSeconds >= 0.9 ? input?.customTerms ?? [] : []
-        const raw = await deps.transcription.transcribe(recording.audio, {
-          language: input?.language,
-          vocabularyHints,
-          signal: controller.signal
-        })
+        const raw = await mitRetry(
+          () =>
+            deps.transcription.transcribe(recording.audio, {
+              language: input?.language,
+              vocabularyHints,
+              signal
+            }),
+          retryOpts
+        )
         const rohtext = deps.quality.rohtextAus(raw, recording.durationSeconds)
         if (rohtext === null) {
           return transition({ status: 'fehler', art: 'aufnahme', message: NO_RECORDING_ERROR })
         }
+        letzterRohtext = rohtext // Transkription gelang → bei späterem Umschreib-Fehler Teil-Erfolg
 
         const def = input?.def
         if (!def || !def.rewrites) {
@@ -203,9 +227,13 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
         const model = input?.chatModell ?? ''
         // Rohtext gekapselt senden (Daten-Rahmen, prompt-builder): zieht die Grenze „zu bearbeitende
         // Daten" vs. „Anweisung", damit ein direkt ansprechendes Diktat nicht als Befehl befolgt wird.
-        const rewritten = await deps.rewrite.rewrite(
-          { system, user: kapsleTranskript(rohtext) },
-          { model, temperature: def.temperature, signal: controller.signal }
+        const rewritten = await mitRetry(
+          () =>
+            deps.rewrite.rewrite(
+              { system, user: kapsleTranskript(rohtext) },
+              { model, temperature: def.temperature, signal }
+            ),
+          retryOpts
         )
         // Etwaig zurückgespiegelte Markierungen entfernen, bevor cleanedTranscript trimmt.
         const endtext = deps.quality.cleanedTranscript(entferneTranskriptMarken(rewritten.text))
@@ -215,12 +243,17 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
         if (abgebrochen) return phase
         const istTimeoutFehler =
           istTimeout || (err instanceof Error && err.name === 'TimeoutError')
+        const art = klassifiziere(err, { istWatchdogTimeout: istTimeoutFehler })
         const message = istTimeoutFehler
           ? 'Zeitüberschreitung beim Anbieter.'
           : err instanceof Error
             ? err.message
             : String(err)
-        return transition({ status: 'fehler', art: 'anbieter', message })
+        // Teil-Erfolg: Transkription gelang, nur das Umschreiben scheiterte → Rohtext retten.
+        if (letzterRohtext !== null) {
+          return teilErfolg(letzterRohtext, recording.durationSeconds, message)
+        }
+        return transition({ status: 'fehler', art, message })
       } finally {
         stoppeWatchdog()
       }
@@ -229,13 +262,13 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
 
   // Setzt die Telemetrie des Laufs und geht nach 'fertig'. rohtext/endtext bleiben hier (Verlauf);
   // die Phase trägt NUR den Endtext (kein rohtext-Leak über den Status-Kanal).
-  function abschluss(
+  function setzeMetrik(
     rohtext: string,
     endtext: string,
     dauerSekunden: number,
     usage: RunMetrik['usage'],
     umgeschrieben: boolean
-  ): WorkflowPhase {
+  ): void {
     letzteMetrik = {
       workflowId: input?.def.id ?? '',
       dauerSekunden,
@@ -244,7 +277,25 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
       usage,
       umgeschrieben
     }
+  }
+
+  function abschluss(
+    rohtext: string,
+    endtext: string,
+    dauerSekunden: number,
+    usage: RunMetrik['usage'],
+    umgeschrieben: boolean
+  ): WorkflowPhase {
+    setzeMetrik(rohtext, endtext, dauerSekunden, usage, umgeschrieben)
     return transition({ status: 'fertig', text: endtext })
+  }
+
+  // Teil-Erfolg (CONTEXT.md): Transkription gelang, Umschreiben scheiterte. Wie ein fertiger Lauf
+  // protokolliert (umgeschrieben=false, endtext=rohtext), aber als eigener Terminal-Zustand, den die
+  // Sitzung NICHT einfügt, sondern in die Zwischenablage legt.
+  function teilErfolg(rohtext: string, dauerSekunden: number, warnung: string): WorkflowPhase {
+    setzeMetrik(rohtext, rohtext, dauerSekunden, undefined, false)
+    return transition({ status: 'teilErfolg', rohtext, warnung })
   }
 
   function transition(next: WorkflowPhase): WorkflowPhase {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createSitzung, type Ausgabe, type Abschlussdaten } from '@main/session/sitzung'
+import type { FehlerMeldung } from '@main/session/fehler-meldung'
 import { createWorkflowRunner } from '@main/workflow/runner'
 import { createSettingsStore, type BlitztextSettings } from '@main/settings/store'
 import * as quality from '@main/transcription/quality'
@@ -18,6 +19,12 @@ interface MakeOpts {
   hangUntilAbort?: boolean
   /** Simuliert, ob der Verlauf tatsächlich geschrieben hat (steuert onHistoryChanged, P5b). */
   verlaufGeschrieben?: boolean
+  /** Lässt die Transkription werfen (für Fehlerpfad-Tests). */
+  transcribeFehler?: Error
+  /** Lässt das Umschreiben werfen (für Teil-Erfolg-Tests). */
+  rewriteFehler?: Error
+  /** Lässt das Protokoll-Schreiben werfen (für die Crash-Härtung A5). */
+  protokollWirft?: boolean
 }
 
 function makeSitzung(opts: MakeOpts = {}) {
@@ -41,6 +48,7 @@ function makeSitzung(opts: MakeOpts = {}) {
     transcription: {
       async transcribe(_audio, options) {
         opts.captureTranscribe?.(options)
+        if (opts.transcribeFehler) throw opts.transcribeFehler
         if (opts.hangUntilAbort) {
           return await new Promise<string>((_resolve, reject) => {
             options?.signal?.addEventListener('abort', () =>
@@ -53,6 +61,7 @@ function makeSitzung(opts: MakeOpts = {}) {
     },
     rewrite: {
       async rewrite() {
+        if (opts.rewriteFehler) throw opts.rewriteFehler
         return { text: opts.rewritten ?? 'umgeschrieben' }
       }
     },
@@ -72,13 +81,21 @@ function makeSitzung(opts: MakeOpts = {}) {
     }
   })
 
-  const calls = { einfügen: [] as string[], anzeigen: [] as string[], zeigeEinstellungen: 0 }
+  const calls = {
+    einfügen: [] as string[],
+    anzeigen: [] as string[],
+    zeigeEinstellungen: 0,
+    melde: [] as FehlerMeldung[],
+    inZwischenablage: [] as string[]
+  }
   const ausgabe: Ausgabe = {
     einfügen: (t) => calls.einfügen.push(t),
     anzeigen: (t) => calls.anzeigen.push(t),
     zeigeEinstellungen: () => {
       calls.zeigeEinstellungen++
-    }
+    },
+    melde: (f) => calls.melde.push(f),
+    inZwischenablage: (t) => calls.inZwischenablage.push(t)
   }
 
   const apiKeys = {
@@ -90,6 +107,7 @@ function makeSitzung(opts: MakeOpts = {}) {
   const protokollDaten: Abschlussdaten[] = []
   const protokoll = {
     aufzeichnen: async (d: Abschlussdaten) => {
+      if (opts.protokollWirft) throw new Error('Disk voll')
       protokollDaten.push(d)
       return opts.verlaufGeschrieben ?? true
     }
@@ -303,5 +321,73 @@ describe('createSitzung', () => {
     sitzung.brichAb()
     await tick()
     expect(historyChanges.n).toBe(0)
+  })
+
+  it('fehler: meldet einen fehlgeschlagenen Lauf, fügt nichts ein (konfiguration → Sprung-Aktion)', async () => {
+    const { sitzung, calls } = makeSitzung({
+      transcribeFehler: Object.assign(new Error('Ungültiger Key'), { status: 401 })
+    })
+
+    await sitzung.starteWorkflow('improve', 'hotkey')
+    await sitzung.stoppe()
+
+    expect(calls.einfügen).toEqual([])
+    expect(calls.melde).toHaveLength(1)
+    expect(calls.melde[0]).toMatchObject({ aktion: 'einstellungen' }) // 401 → konfiguration
+  })
+
+  it('teilErfolg: Umschreib-Fehler legt den Rohtext in die Zwischenablage (nie einfügen) + protokolliert', async () => {
+    const { sitzung, calls, protokollDaten } = makeSitzung({
+      transcript: 'roher diktattext',
+      rewriteFehler: new Error('KI-Fehler: kaputt')
+    })
+
+    await sitzung.starteWorkflow('improve', 'hotkey')
+    await sitzung.stoppe()
+    await tick() // protokolliere ist fire-and-forget
+
+    expect(calls.einfügen).toEqual([])
+    expect(calls.inZwischenablage).toEqual(['roher diktattext'])
+    expect(calls.melde).toHaveLength(1)
+    expect(protokollDaten).toHaveLength(1)
+    expect(protokollDaten[0]).toMatchObject({
+      rohtext: 'roher diktattext',
+      endtext: 'roher diktattext',
+      umgeschrieben: false
+    })
+  })
+
+  it('A5: ein fehlschlagendes Protokoll-Schreiben reißt den Lauf NICHT herunter (Einfügen bleibt)', async () => {
+    const { sitzung, calls } = makeSitzung({ transcript: 'hallo', protokollWirft: true })
+
+    await sitzung.starteWorkflow('transcribe', 'hotkey')
+    await expect(sitzung.stoppe()).resolves.toBeUndefined()
+    await tick()
+
+    // Das Einfügen erfolgte; der nachgelagerte Schreibfehler wurde geschluckt (kein Re-throw).
+    expect(calls.einfügen).toEqual(['hallo'])
+  })
+
+  it('L1: key-loser lokaler Anbieter nimmt auch ohne Key auf (Gate lässt durch)', async () => {
+    const { sitzung, recorder } = makeSitzung({
+      hasKey: false,
+      settings: {
+        anbieter: [
+          {
+            id: 'lokal',
+            vorlage: 'custom',
+            label: 'Lokal',
+            baseUrl: 'http://localhost:8000/v1',
+            asrModell: 'whisper-1',
+            chatModell: 'x',
+            keinKeyNoetig: true
+          }
+        ],
+        standardAnbieterId: 'lokal'
+      }
+    })
+
+    await sitzung.starteWorkflow('transcribe', 'hotkey')
+    expect(recorder.started).toBe(1)
   })
 })

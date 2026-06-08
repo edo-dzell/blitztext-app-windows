@@ -15,4 +15,10 @@ describe('phaseTooltip', () => {
       'Blitztext — Fehler: OpenAI-Fehler'
     )
   })
+
+  it('zeigt Teil-Erfolg im Tooltip', () => {
+    expect(phaseTooltip({ status: 'teilErfolg', rohtext: 'x', warnung: 'w' })).toBe(
+      'Blitztext — Rohtext in Zwischenablage'
+    )
+  })
 })

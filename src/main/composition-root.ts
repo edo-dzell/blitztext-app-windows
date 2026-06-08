@@ -121,14 +121,16 @@ export async function createMainComposition(deps: CompositionDeps): Promise<Main
 
   const rewriteProvider = createCloudRewriteProvider({
     getApiKey,
-    getBaseUrl: () => aktiverAnbieter.baseUrl
+    getBaseUrl: () => aktiverAnbieter.baseUrl,
+    erlaubeOhneKey: () => aktiverAnbieter.keinKeyNoetig === true
   })
 
   const runner = createWorkflowRunner({
     recorder: deps.recorder,
     transcription: createCloudTranscriptionProvider({
       getApiKey,
-      getConfig: () => ({ baseUrl: aktiverAnbieter.baseUrl, model: aktiverAnbieter.asrModell })
+      getConfig: () => ({ baseUrl: aktiverAnbieter.baseUrl, model: aktiverAnbieter.asrModell }),
+      erlaubeOhneKey: () => aktiverAnbieter.keinKeyNoetig === true
     }),
     rewrite: rewriteProvider,
     resolveSystemPrompt,
@@ -139,8 +141,8 @@ export async function createMainComposition(deps: CompositionDeps): Promise<Main
   const verlauf = createVerlaufStore({
     cipher: deps.verlaufCipher,
     file: deps.verlaufFile,
-    // Live: aktiv nur, wenn opt-in an UND nicht im Sicheren Lokalen Modus.
-    istAktiv: () => settings.verlaufAktiv && !settings.sichererLokalerModus
+    // Live: aktiv nur, wenn opt-in an UND die Verlauf-Sperre nicht greift.
+    istAktiv: () => settings.verlaufAktiv && !settings.verlaufGesperrt
   })
   const stats = createStatsStore({ file: deps.statsFile })
   const protokoll = createProtokoll({
