@@ -85,9 +85,15 @@ export function kapsleTranskript(rohtext: string): string {
 /**
  * Entfernt etwaige vom Modell zurückgespiegelte Transkript-Markierungen aus dem Endtext (defensiv:
  * ein nicht ganz folgsames Modell könnte sie echoen — sie dürfen nie im eingefügten Text landen).
+ *
+ * Toleranz absichtlich breit (v0.4.2-Bug): Schwächere Modelle echoen die Schluss-Marke und
+ * normalisieren das deutsche „transkript" zur weit häufigeren englischen Form „transcript" (mit c) —
+ * dann blieb </transcript> am Endtext hängen. Daher trans[ck]ript + Streu-Whitespace. Die spitzen
+ * Klammern bleiben PFLICHT, damit das blanke Wort in echtem Inhalt („Das Transkript war gut") nie
+ * zerstört wird.
  */
 export function entferneTranskriptMarken(text: string): string {
-  return text.replace(/<\/?transkript>/gi, '').trim()
+  return text.replace(/<\s*\/?\s*trans[ck]ript\s*\/?\s*>/gi, '').trim()
 }
 
 const SPRACHNAMEN: Record<string, string> = { de: 'Deutsch', en: 'Englisch' }

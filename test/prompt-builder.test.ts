@@ -263,4 +263,15 @@ describe('Daten-Rahmen / Prompt-Injection-Härtung (v0.3.4)', () => {
     expect(entferneTranskriptMarken('  </TRANSKRIPT> nur Text ')).toBe('nur Text')
     expect(entferneTranskriptMarken('unauffälliger Text')).toBe('unauffälliger Text')
   })
+
+  it('entferneTranskriptMarken toleriert die englische Schreibweise "transcript" (v0.4.2-Bug)', () => {
+    // Schwächere Modelle echoen die Schluss-Marke und normalisieren das deutsche „transkript" zur
+    // weit häufigeren englischen Form „transcript" (mit c). Der Endtext endete dann auf </transcript>.
+    expect(entferneTranskriptMarken('Endtext, der bleibt.\n</transcript>')).toBe('Endtext, der bleibt.')
+    expect(entferneTranskriptMarken('<transcript>\nfertig\n</transcript>')).toBe('fertig')
+    // Streu-Whitespace und Großschreibung innerhalb der Marke ebenfalls tolerieren.
+    expect(entferneTranskriptMarken('Text < / Transcript >')).toBe('Text')
+    // Das blanke Wort (ohne spitze Klammern) bleibt unangetastet — sonst würde echter Inhalt zerstört.
+    expect(entferneTranskriptMarken('Das Transkript war gut')).toBe('Das Transkript war gut')
+  })
 })
