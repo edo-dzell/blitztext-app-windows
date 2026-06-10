@@ -19,10 +19,19 @@ const DAMPF_ABLASSEN_PROMPT =
   'werden, verdichte sie auf die entscheidenden Kernpunkte. Der Ton soll ruhig, menschlich, ' +
   'bestimmt und lösungsorientiert sein. Gib NUR die fertige Nachricht zurück.'
 
+// v0.4.2 „Treuer Polierer": Der generische Lektor-Prompt (macOS-Original) gab dem Modell zu viel
+// Lizenz — diktierte du-Anweisungen wurden gesiezt (inkonsistent von Lauf zu Lauf), Inhalte
+// hinzuerfunden („Metadaten"), Anweisungen in unpersönliche Empfehlungen umgeformt und
+// Fachbegriffe wegnormalisiert („Skill-Profi-Agent" → „Skill-Entwickler"). Die Invarianten unten
+// ziehen die Grenze: glätten ja, umdeuten nein. Ton ≠ Anrede ≠ Inhalt (siehe TONE_LINES).
 const IMPROVE_BASE = [
-  'Du bist ein Lektor und Schreibassistent. Verbessere den folgenden Text:',
-  '- Korrigiere Rechtschreibung und Grammatik',
-  '- Verbessere die Formulierung und den Lesefluss',
+  'Du bist ein Lektor für diktierte Texte. Überarbeite den folgenden Text behutsam:',
+  '- Korrigiere Rechtschreibung und Grammatik, entferne Versprecher und Füllwörter',
+  '- Glätte den Lesefluss, aber greife so wenig wie möglich ein — ersetze Wörter und Formulierungen nicht ohne Not',
+  '- Behalte Anrede und Perspektive EXAKT bei: du bleibt du, Sie bleibt Sie, ich bleibt ich',
+  '- Behalte die Form der Aussage bei: eine Anweisung bleibt eine Anweisung, eine Frage eine Frage, eine Bitte eine Bitte — wandle nichts in unpersönliche Empfehlungen um',
+  '- Erfinde keine Inhalte hinzu und lasse nichts Inhaltliches weg',
+  '- Behalte Fachbegriffe, Eigennamen und fremdsprachige Begriffe unverändert bei',
   '- Behalte die ursprüngliche Bedeutung bei',
   '- Gib NUR den verbesserten Text zurück, keine Erklärungen'
 ].join('\n')
@@ -155,10 +164,15 @@ export function stelleBerechnetWieder(def: WorkflowDefinition): WorkflowDefiniti
   return { ...def, promptModus: 'berechnet', systemPrompt: '' }
 }
 
+// Ton wirkt auf Wortwahl und Stil — NIE auf die Anrede: „formal" hieß für das Modell sonst
+// „siezen", und ein diktiertes „du" an einen Adressaten wurde umadressiert (v0.4.2).
 const TONE_LINES: Record<NonNullable<RewriteSettings['tone']>, string> = {
-  formal: '- Verwende einen formellen, professionellen Ton',
-  neutral: '- Verwende einen neutralen, klaren Ton',
-  casual: '- Verwende einen lockeren, natürlichen Ton'
+  formal:
+    '- Verwende einen formellen, professionellen Ton — ändere dabei NIE die Anrede (du bleibt du, Sie bleibt Sie)',
+  neutral:
+    '- Verwende einen neutralen, klaren Ton — ändere dabei NIE die Anrede (du bleibt du, Sie bleibt Sie)',
+  casual:
+    '- Verwende einen lockeren, natürlichen Ton — ändere dabei NIE die Anrede (du bleibt du, Sie bleibt Sie)'
 }
 
 function buildImprovePrompt(settings: RewriteSettings): string {

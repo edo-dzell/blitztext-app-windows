@@ -21,7 +21,7 @@ describe('buildSystemPrompt', () => {
 
   it('liefert für improve den Lektor-Default', () => {
     const prompt = buildSystemPrompt('improve')
-    expect(prompt).toContain('Du bist ein Lektor und Schreibassistent')
+    expect(prompt).toContain('Du bist ein Lektor für diktierte Texte')
     expect(prompt).toContain('Gib NUR den verbesserten Text zurück')
   })
 
@@ -29,6 +29,41 @@ describe('buildSystemPrompt', () => {
     expect(buildSystemPrompt('improve', { tone: 'formal' })).toContain('formellen, professionellen Ton')
     expect(buildSystemPrompt('improve', { tone: 'neutral' })).toContain('neutralen, klaren Ton')
     expect(buildSystemPrompt('improve', { tone: 'casual' })).toContain('lockeren, natürlichen Ton')
+  })
+
+  // v0.4.2 „Treuer Polierer": Blitztext+ siezte diktierte du-Anweisungen, erfand Inhalte hinzu
+  // („Metadaten") und wandelte Anweisungen in unpersönliche Empfehlungen um. Der Prompt trägt
+  // jetzt explizite Invarianten — diese Tests sichern die Prompt-Zeilen (Modellwirkung = HITL).
+  describe('Treuer Polierer — Invarianten (v0.4.2)', () => {
+    it('improve verlangt: Anrede und Perspektive exakt beibehalten', () => {
+      const prompt = buildSystemPrompt('improve')
+      expect(prompt).toContain('Anrede und Perspektive')
+      expect(prompt).toContain('du bleibt du, Sie bleibt Sie, ich bleibt ich')
+    })
+
+    it('improve verlangt: Form der Aussage erhalten (Anweisung/Frage/Bitte, keine Empfehlungen)', () => {
+      const prompt = buildSystemPrompt('improve')
+      expect(prompt).toContain('eine Anweisung bleibt eine Anweisung')
+      expect(prompt).toContain('unpersönliche Empfehlungen')
+    })
+
+    it('improve verlangt: nichts hinzuerfinden, nichts Inhaltliches weglassen', () => {
+      const prompt = buildSystemPrompt('improve')
+      expect(prompt).toContain('Erfinde keine Inhalte hinzu')
+      expect(prompt).toContain('lasse nichts Inhaltliches weg')
+    })
+
+    it('improve verlangt: minimal eingreifen, Fachbegriffe/Eigennamen unangetastet', () => {
+      const prompt = buildSystemPrompt('improve')
+      expect(prompt).toContain('so wenig wie möglich')
+      expect(prompt).toContain('Fachbegriffe, Eigennamen')
+    })
+
+    it('jede Ton-Zeile schützt die Anrede (Ton ≠ Anrede)', () => {
+      for (const tone of ['formal', 'neutral', 'casual'] as const) {
+        expect(buildSystemPrompt('improve', { tone })).toContain('ändere dabei NIE die Anrede')
+      }
+    })
   })
 
   it('hängt für improve die Eigene-Begriffe-Zeile an', () => {
