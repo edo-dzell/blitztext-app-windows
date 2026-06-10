@@ -7,7 +7,8 @@ import {
   nativeImage,
   Notification,
   screen,
-  nativeTheme
+  nativeTheme,
+  powerMonitor
 } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -412,6 +413,14 @@ if (!gotTheLock) {
 
     // Globaler Hotkey über uiohook → verarbeiteTaste → Sitzung (ersetzt den globalShortcut-Platzhalter).
     stopUiohook = starteUiohookQuelle({ verarbeiteTaste: comp.verarbeiteTaste })
+
+    // Sperre/Standby verschlucken Keyups (Win+L → Secure Desktop, RESEARCH §3): Tasten-Tracking
+    // zurücksetzen, sonst bleibt z. B. die Win-Taste „gedrückt" und LinksStrg allein startet die
+    // Aufnahme. Ein gerade aktiver Hotkey-Lauf wird dabei abgebrochen.
+    powerMonitor.on('lock-screen', () => comp.setzeTastenZurueck())
+    powerMonitor.on('unlock-screen', () => comp.setzeTastenZurueck())
+    powerMonitor.on('suspend', () => comp.setzeTastenZurueck())
+    powerMonitor.on('resume', () => comp.setzeTastenZurueck())
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) showSettings()

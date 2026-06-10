@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { createHotkeyDispatcher } from '@main/hotkey/dispatcher'
+import type { ModifierLage } from '@main/hotkey/matcher'
+
+const maske = (teile: Partial<ModifierLage> = {}): ModifierLage => ({
+  ctrl: false,
+  alt: false,
+  shift: false,
+  meta: false,
+  ...teile
+})
 
 // Zwei nicht-überlappende Chords → zwei Workflows.
 const bindungen = [
@@ -52,5 +61,47 @@ describe('createHotkeyDispatcher', () => {
     const d = createHotkeyDispatcher({ bindungen, mode: 'hold' })
     expect(d.handle({ type: 'down', key: 'KeyA' })).toBeNull()
     expect(d.handle({ type: 'down', key: 'ControlLeft' })).toBeNull()
+  })
+})
+
+// Bug v0.4.0: verlorenes Win-Keyup (Win+L/UAC/erhöhtes Fenster) → transcribe startete bei
+// LinksStrg allein. Heilung über die Modifier-Maske + expliziter Reset (powerMonitor).
+describe('Selbstheilung & Reset', () => {
+  const blitz = [
+    { chord: ['ControlLeft', 'MetaLeft'], workflow: 'transcribe' as const },
+    { chord: ['ControlRight', 'KeyJ'], workflow: 'improve' as const }
+  ]
+
+  it('verlorenes Win-Keyup: Strg allein startet transcribe NICHT (Maske heilt)', () => {
+    const d = createHotkeyDispatcher({ bindungen: blitz, mode: 'hold' })
+    d.handle({ type: 'down', key: 'MetaLeft', modifiers: maske({ meta: true }) })
+    // Keyup verloren; später Strg allein:
+    expect(d.handle({ type: 'down', key: 'ControlLeft', modifiers: maske({ ctrl: true }) })).toBeNull()
+  })
+
+  it('setzeZurueck() bricht den aktiven Workflow ab und leert das Tracking aller Matcher', () => {
+    const d = createHotkeyDispatcher({ bindungen: blitz, mode: 'hold' })
+    d.handle({ type: 'down', key: 'MetaLeft' })
+    expect(d.handle({ type: 'down', key: 'ControlLeft' })).toEqual({
+      aktion: 'start',
+      workflow: 'transcribe'
+    })
+
+    expect(d.setzeZurueck()).toEqual({ aktion: 'cancel', workflow: 'transcribe' })
+
+    // Tracking geleert: Strg allein startet nicht mehr …
+    expect(d.handle({ type: 'down', key: 'ControlLeft' })).toBeNull()
+    d.handle({ type: 'up', key: 'ControlLeft' })
+    // … der volle Chord schon:
+    d.handle({ type: 'down', key: 'MetaLeft' })
+    expect(d.handle({ type: 'down', key: 'ControlLeft' })).toEqual({
+      aktion: 'start',
+      workflow: 'transcribe'
+    })
+  })
+
+  it('setzeZurueck() im Leerlauf → null', () => {
+    const d = createHotkeyDispatcher({ bindungen: blitz, mode: 'hold' })
+    expect(d.setzeZurueck()).toBeNull()
   })
 })

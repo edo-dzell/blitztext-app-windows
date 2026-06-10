@@ -1,13 +1,29 @@
 // Reine Zustandsmaschine: aus synthetischen Tasten-Down/Up + Aufnahmemodus + Chord → start/stop/cancel.
 // Treue Portierung von HotkeyService.swift, an uiohooks diskrete Down/Up-Events angepasst (statt
 // macOS' flagsChanged). Keine uiohook-Abhängigkeit — die Ereignisquelle liegt hinter einem Adapter.
+//
+// Selbstheilung: Win+L/UAC/erhöhte Fenster verschlucken Keyups (UIPI, RESEARCH §3) — ohne Korrektur
+// bliebe der Modifier für immer „gedrückt" und eine einzelne Resttaste startete die Aufnahme. Die
+// Quelle liefert deshalb pro Event die kollabierte Modifier-Maske (libuiohook resynct sie nach
+// UIPI-Blockaden aus GetAsyncKeyState); meldet sie eine Familie als losgelassen, fliegen deren
+// Tasten aus dem Tracking.
 
 export type RecordingMode = 'hold' | 'toggle'
 export type HotkeyAction = 'start' | 'stop' | 'cancel'
 
+/** Kollabierte Modifier-Maske der Quelle (links/rechts vereint, uiohook ctrlKey & Co.). */
+export interface ModifierLage {
+  ctrl: boolean
+  alt: boolean
+  shift: boolean
+  meta: boolean
+}
+
 export interface KeyEvent {
   type: 'down' | 'up'
   key: string
+  /** Falls vorhanden: Ground Truth zum Aufräumen verlorener Keyups. */
+  modifiers?: ModifierLage
 }
 
 export interface HotkeyMatcherConfig {
@@ -17,6 +33,19 @@ export interface HotkeyMatcherConfig {
 
 export interface HotkeyMatcher {
   handle(event: KeyEvent): HotkeyAction | null
+  /** Vergisst alle getrackten Tasten und den Aktiv-Zustand (z. B. nach Sperre/Standby). */
+  reset(): void
+}
+
+const MODIFIER_FAMILIE: Record<string, keyof ModifierLage> = {
+  ControlLeft: 'ctrl',
+  ControlRight: 'ctrl',
+  AltLeft: 'alt',
+  AltRight: 'alt',
+  ShiftLeft: 'shift',
+  ShiftRight: 'shift',
+  MetaLeft: 'meta',
+  MetaRight: 'meta'
 }
 
 export function createHotkeyMatcher(config: HotkeyMatcherConfig): HotkeyMatcher {
@@ -31,7 +60,20 @@ export function createHotkeyMatcher(config: HotkeyMatcherConfig): HotkeyMatcher 
     return true
   }
 
+  // Entfernt getrackte Modifier, die laut Maske gar nicht (mehr) gedrückt sind.
+  const raeumeStaleTasten = (modifiers: ModifierLage): void => {
+    for (const key of pressed) {
+      const familie = MODIFIER_FAMILIE[key]
+      if (familie && !modifiers[familie]) pressed.delete(key)
+    }
+  }
+
   return {
+    reset() {
+      pressed.clear()
+      active = false
+    },
+
     handle(event) {
       // Escape ist der feste Abbruch-Key (HotkeyService.handleEscape, keyCode 53).
       if (event.key === 'Escape') {
@@ -42,11 +84,16 @@ export function createHotkeyMatcher(config: HotkeyMatcherConfig): HotkeyMatcher 
         return null
       }
 
-      if (!chord.has(event.key)) return null
-
+      // wasComplete VOR dem Aufräumen messen: nur so wird eine verwaiste aktive Aufnahme
+      // (Keyups während der Sperre verloren) als fallende Flanke erkannt und beendet.
       const wasComplete = chordComplete()
-      if (event.type === 'down') pressed.add(event.key)
-      else pressed.delete(event.key)
+      if (event.modifiers) raeumeStaleTasten(event.modifiers)
+
+      const istChordTaste = chord.has(event.key)
+      if (istChordTaste) {
+        if (event.type === 'down') pressed.add(event.key)
+        else pressed.delete(event.key)
+      }
       const isComplete = chordComplete()
 
       const risingEdge = !wasComplete && isComplete
@@ -59,7 +106,11 @@ export function createHotkeyMatcher(config: HotkeyMatcherConfig): HotkeyMatcher 
         }
         if (fallingEdge && active) {
           active = false
-          return 'stop'
+          // Kam die Flanke vom echten Loslassen einer Chord-Taste → stop (transkribieren).
+          // Entstand sie nur durchs Aufräumen, ist der Loslass-Zeitpunkt unbekannt → cancel
+          // (kein blindes Transkribieren einer verwaisten Aufnahme).
+          const echtesLoslassen = event.type === 'up' && istChordTaste
+          return echtesLoslassen ? 'stop' : 'cancel'
         }
         return null
       }

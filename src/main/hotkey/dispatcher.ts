@@ -30,6 +30,11 @@ export interface DispatchAktion {
 
 export interface HotkeyDispatcher {
   handle(event: KeyEvent): DispatchAktion | null
+  /**
+   * Vergisst alle getrackten Tasten (z. B. nach Sperre/Standby — Keyups gingen verloren).
+   * Ein gerade aktiver Workflow wird als cancel gemeldet (kein blindes Weiterlaufen).
+   */
+  setzeZurueck(): DispatchAktion | null
 }
 
 export function createHotkeyDispatcher(config: HotkeyDispatcherConfig): HotkeyDispatcher {
@@ -59,6 +64,14 @@ export function createHotkeyDispatcher(config: HotkeyDispatcherConfig): HotkeyDi
       if (!gestartet) return null
       aktiv = { workflow: gestartet.workflow, matcher: gestartet.matcher }
       return { aktion: 'start', workflow: gestartet.workflow }
+    },
+
+    setzeZurueck() {
+      for (const e of eintraege) e.matcher.reset()
+      if (!aktiv) return null
+      const workflow = aktiv.workflow
+      aktiv = null
+      return { aktion: 'cancel', workflow }
     }
   }
 }

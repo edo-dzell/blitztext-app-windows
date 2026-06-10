@@ -27,7 +27,15 @@ export function starteUiohookQuelle(deps: UiohookQuelleDeps): () => void {
   const hook = deps.hook ?? uIOhook
   const handler = (type: 'down' | 'up') => (e: UiohookKeyboardEvent): void => {
     const key = keycodeZuName(e.keycode)
-    if (key) deps.verarbeiteTaste({ type, key })
+    // Modifier-Maske mitgeben: libuiohook resynct sie nach UIPI-Blockaden (erhöhte Fenster,
+    // Secure Desktop) aus GetAsyncKeyState — der Matcher räumt damit verlorene Keyups auf.
+    if (key) {
+      deps.verarbeiteTaste({
+        type,
+        key,
+        modifiers: { ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey }
+      })
+    }
   }
   hook.on('keydown', handler('down'))
   hook.on('keyup', handler('up'))

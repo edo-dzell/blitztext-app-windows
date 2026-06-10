@@ -19,11 +19,24 @@ function fakeHook() {
       stopped++
     }
   }
-  const feuere = (event: 'keydown' | 'keyup', keycode: number): void => {
-    for (const l of listeners[event]) l({ keycode } as UiohookKeyboardEvent)
+  const feuere = (
+    event: 'keydown' | 'keyup',
+    keycode: number,
+    mods: Partial<Pick<UiohookKeyboardEvent, 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>> = {}
+  ): void => {
+    const e = {
+      keycode,
+      ctrlKey: mods.ctrlKey ?? false,
+      altKey: mods.altKey ?? false,
+      shiftKey: mods.shiftKey ?? false,
+      metaKey: mods.metaKey ?? false
+    } as UiohookKeyboardEvent
+    for (const l of listeners[event]) l(e)
   }
   return { hook, feuere, get started() { return started }, get stopped() { return stopped } }
 }
+
+const keineMaske = { ctrl: false, alt: false, shift: false, meta: false }
 
 describe('starteUiohookQuelle', () => {
   it('mappt keydown/keyup-Keycodes auf KeyEvents (DOM-Namen) und startet den Hook', () => {
@@ -36,9 +49,22 @@ describe('starteUiohookQuelle', () => {
     f.feuere('keydown', 0x0036) // ShiftRight
     f.feuere('keyup', 0x0036)
 
-    expect(verarbeiteTaste).toHaveBeenNthCalledWith(1, { type: 'down', key: 'ControlRight' })
-    expect(verarbeiteTaste).toHaveBeenNthCalledWith(2, { type: 'down', key: 'ShiftRight' })
-    expect(verarbeiteTaste).toHaveBeenNthCalledWith(3, { type: 'up', key: 'ShiftRight' })
+    expect(verarbeiteTaste).toHaveBeenNthCalledWith(1, { type: 'down', key: 'ControlRight', modifiers: keineMaske })
+    expect(verarbeiteTaste).toHaveBeenNthCalledWith(2, { type: 'down', key: 'ShiftRight', modifiers: keineMaske })
+    expect(verarbeiteTaste).toHaveBeenNthCalledWith(3, { type: 'up', key: 'ShiftRight', modifiers: keineMaske })
+  })
+
+  it('reicht die Modifier-Maske der Quelle durch (Selbstheilung verlorener Keyups)', () => {
+    const f = fakeHook()
+    const verarbeiteTaste = vi.fn()
+    starteUiohookQuelle({ verarbeiteTaste, hook: f.hook })
+
+    f.feuere('keydown', 0x001d, { ctrlKey: true, metaKey: true }) // ControlLeft bei gehaltenem Win
+    expect(verarbeiteTaste).toHaveBeenCalledWith({
+      type: 'down',
+      key: 'ControlLeft',
+      modifiers: { ctrl: true, alt: false, shift: false, meta: true }
+    })
   })
 
   it('verwirft ungemappte Keycodes', () => {

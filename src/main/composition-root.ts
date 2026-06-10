@@ -65,6 +65,12 @@ export interface MainComposition {
   /** Ein KeyEvent aus dem uiohook-Adapter (HITL) hier einspeisen → Dispatch → Sitzung. */
   verarbeiteTaste(event: KeyEvent): void
   /**
+   * Setzt das Hotkey-Tasten-Tracking zurück (powerMonitor: Sperre/Standby/Resume) — dort gehen
+   * Keyups verloren (Secure Desktop/UIPI) und Modifier blieben sonst für immer „gedrückt".
+   * Ein gerade per Hotkey aktiver Lauf wird abgebrochen (kein blindes Weiterlaufen der Aufnahme).
+   */
+  setzeTastenZurueck(): void
+  /**
    * Prompt-Assistent: erzeugt einen System-Prompt-Entwurf über den Chat-Anbieter (ADR-0008). Ist
    * `bestehend` gesetzt, wird dieser Prompt VERBESSERT statt neu erstellt (W-4).
    */
@@ -197,6 +203,9 @@ export async function createMainComposition(deps: CompositionDeps): Promise<Main
     stats,
     verarbeiteTaste(event) {
       routeDispatch(dispatcher.handle(event), sitzung)
+    },
+    setzeTastenZurueck() {
+      routeDispatch(dispatcher.setzeZurueck(), sitzung)
     },
     async assistiere(beschreibung, bestehend) {
       // Assistent läuft über den Standard-Anbieter (kein Workflow-Kontext).
