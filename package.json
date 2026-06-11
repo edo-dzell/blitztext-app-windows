@@ -1,6 +1,6 @@
 {
   "name": "blitztext-app",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Windows-Neuschrieb der Blitztext Speech-to-Text App (Electron + React + TypeScript)",
   "private": true,
   "author": "edo-dzell",

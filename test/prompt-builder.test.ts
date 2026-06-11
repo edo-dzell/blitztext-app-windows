@@ -19,6 +19,19 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('ruhig, menschlich, bestimmt')
   })
 
+  // v0.4.4: Der calm-Workflow fasste eine Schimpf-Tirade als an sich gerichtete Beschwerde auf und
+  // antwortete beschwichtigend („Ich verstehe, dass Sie… wie kann ich Sie unterstützen?") statt sie
+  // umzuformulieren; zugleich kippte die Anrede du→Sie. Diese Tests sichern die Invarianten im Prompt.
+  it('calm hält die Ich-Perspektive und antwortet NICHT auf die Tirade (v0.4.4)', () => {
+    const prompt = buildSystemPrompt('calm')
+    expect(prompt).toContain('Ich-Perspektive des Sprechers')
+    expect(prompt).toContain('ANTWORTE NICHT')
+    // Das genau beobachtete Fehlmuster wird im Prompt explizit verboten.
+    expect(prompt).toContain('Ich verstehe, dass Sie')
+    // Anrede-Invariante (du bleibt du, Sie bleibt Sie) — gegen das Kippen du→Sie aus dem echten Leak.
+    expect(prompt).toContain('Adressat und Anrede EXAKT bei')
+  })
+
   it('liefert für improve den Lektor-Default', () => {
     const prompt = buildSystemPrompt('improve')
     expect(prompt).toContain('Du bist ein Lektor für diktierte Texte')
@@ -273,5 +286,25 @@ describe('Daten-Rahmen / Prompt-Injection-Härtung (v0.3.4)', () => {
     expect(entferneTranskriptMarken('Text < / Transcript >')).toBe('Text')
     // Das blanke Wort (ohne spitze Klammern) bleibt unangetastet — sonst würde echter Inhalt zerstört.
     expect(entferneTranskriptMarken('Das Transkript war gut')).toBe('Das Transkript war gut')
+  })
+
+  it('entferneTranskriptMarken schneidet JEDES randständige <…>-Tag weg, auch verstümmelte (v0.4.4)', () => {
+    // Echte Leaks (Nutzer-Verlauf 11.6.2026): das Modell sendet die Schlussmarke VERSTÜMMELT —
+    // „</transcrip>" ohne das letzte „t". Wortbasiertes Matching (v0.4.3: „trans[ck]ript") rutschte
+    // daran vorbei. Strukturell: jedes <…> am Rand ist Markup und damit illegitim (App schreibt nur Text).
+    expect(entferneTranskriptMarken('Es geht um die Reflexe der Group.\n</transcrip>')).toBe(
+      'Es geht um die Reflexe der Group.'
+    )
+    // Beliebiger Tag-Inhalt, nicht nur „transkript".
+    expect(entferneTranskriptMarken('Antwort steht.\n</xyz>')).toBe('Antwort steht.')
+    expect(entferneTranskriptMarken('Antwort steht.\n<irgendein tag>')).toBe('Antwort steht.')
+    // Extra-Härtung: auch wenn zusätzlich das schließende „>" abgeschnitten wurde → „</…" am Ende.
+    expect(entferneTranskriptMarken('Fertig.\n</transcrip')).toBe('Fertig.')
+    // Mehrere randständige Marken hintereinander werden alle entfernt.
+    expect(entferneTranskriptMarken('<transkript>\nKern\n</transkript>\n</transcrip>')).toBe('Kern')
+    // KEIN Fehlschnitt bei echtem „kleiner als" im Satz (kein „</", kein schließendes „>").
+    expect(entferneTranskriptMarken('Der Wert a < b bleibt')).toBe('Der Wert a < b bleibt')
+    // Ein Tag MITTEN im Satz (nicht am Rand) bleibt unangetastet — wir putzen nur die Ränder.
+    expect(entferneTranskriptMarken('Vorher <mitte> nachher')).toBe('Vorher <mitte> nachher')
   })
 })

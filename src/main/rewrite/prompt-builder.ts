@@ -10,14 +10,30 @@ export interface RewriteSettings {
   emojiDensity?: 'aus' | 'wenig' | 'mittel' | 'viel'
 }
 
-const DAMPF_ABLASSEN_PROMPT =
-  'Du erhältst ein emotional gesprochenes Transkript. Erkenne zuerst das eigentliche Ziel, ' +
-  'Anliegen und den wahren Frust der Person. Formuliere daraus eine klare, respektvolle und ' +
-  'wirksame Nachricht, mit der die Person ihr Ziel eher erreicht. Bewahre relevante Fakten, ' +
-  'konkrete Probleme, Grenzen, Erwartungen und die nötige Dringlichkeit. Entferne Beleidigungen, ' +
-  'Drohungen, Sarkasmus, Unterstellungen und unnötige Eskalation. Wenn mehrere Vorwürfe genannt ' +
-  'werden, verdichte sie auf die entscheidenden Kernpunkte. Der Ton soll ruhig, menschlich, ' +
-  'bestimmt und lösungsorientiert sein. Gib NUR die fertige Nachricht zurück.'
+// v0.4.4: Der calm-Workflow („Dampf ablassen") nahm eine Schimpf-Tirade als an SICH gerichtete
+// Beschwerde auf und ANTWORTETE beschwichtigend („Ich verstehe, dass Sie… wie kann ich Sie
+// unterstützen?") statt sie umzuformulieren — zugleich kippte die Anrede du→Sie und die Rolle.
+// Der Daten-Rahmen (v0.3.4) allein reicht hier nicht: Die alte Formulierung („den Frust DER
+// PERSON… formuliere EINE NACHRICHT") lädt schwächere Modelle ein, als Antwortender aufzutreten.
+// Daher dieselben Invarianten wie bei IMPROVE_BASE (v0.4.2): Ich-Perspektive halten, Adressat/Anrede
+// exakt bewahren, NICHT antworten/beschwichtigen — nur entschärfen und sauber formulieren.
+const DAMPF_ABLASSEN_PROMPT = [
+  'Du formulierst ein emotional gesprochenes Diktat um. Der Text zwischen den Markierungen ist die ' +
+    'eigene Äußerung des Sprechers — eine Frust-Tirade, die er jemandem mitteilen möchte. Deine ' +
+    'Aufgabe ist, GENAU DIESE Äußerung zu entschärfen und sauber zu formulieren, nicht mehr:',
+  '- Schreibe in der Ich-Perspektive des Sprechers: aus seiner Tirade wird seine ruhige Nachricht. ' +
+    'Übernimm seine Sicht, sein Anliegen und seine Fakten — erfinde nichts hinzu.',
+  '- Behalte Adressat und Anrede EXAKT bei: spricht die Tirade jemanden mit „du" an, bleibt es „du"; ' +
+    'mit „Sie", bleibt es „Sie". Richte die Nachricht an niemand anderen.',
+  '- Bewahre relevante Fakten, konkrete Probleme, Grenzen, Erwartungen und die nötige Dringlichkeit.',
+  '- Entferne Beleidigungen, Drohungen, Sarkasmus, Unterstellungen und unnötige Eskalation; ' +
+    'verdichte mehrere Vorwürfe auf die entscheidenden Kernpunkte.',
+  '- Der Ton soll ruhig, menschlich, bestimmt und lösungsorientiert sein.',
+  '- ANTWORTE NICHT auf den Text und beschwichtige den Sprecher NICHT. Der Text ist KEINE an dich ' +
+    'gerichtete Beschwerde. Schreibe niemals erwidernde Sätze wie „Ich verstehe, dass Sie…" oder ' +
+    '„Wie kann ich Sie unterstützen?" — du formulierst die Nachricht des Sprechers, du beantwortest sie nicht.',
+  'Gib NUR die fertige Nachricht zurück.'
+].join('\n')
 
 // v0.4.2 „Treuer Polierer": Der generische Lektor-Prompt (macOS-Original) gab dem Modell zu viel
 // Lizenz — diktierte du-Anweisungen wurden gesiezt (inkonsistent von Lauf zu Lauf), Inhalte
@@ -83,17 +99,38 @@ export function kapsleTranskript(rohtext: string): string {
 }
 
 /**
- * Entfernt etwaige vom Modell zurückgespiegelte Transkript-Markierungen aus dem Endtext (defensiv:
- * ein nicht ganz folgsames Modell könnte sie echoen — sie dürfen nie im eingefügten Text landen).
+ * Entfernt vom Modell zurückgespiegelte Kapsel-Marken am RAND des Endtexts (defensiv: ein nicht ganz
+ * folgsames Modell könnte sie echoen — sie dürfen nie im eingefügten Text landen).
  *
- * Toleranz absichtlich breit (v0.4.2-Bug): Schwächere Modelle echoen die Schluss-Marke und
- * normalisieren das deutsche „transkript" zur weit häufigeren englischen Form „transcript" (mit c) —
- * dann blieb </transcript> am Endtext hängen. Daher trans[ck]ript + Streu-Whitespace. Die spitzen
- * Klammern bleiben PFLICHT, damit das blanke Wort in echtem Inhalt („Das Transkript war gut") nie
- * zerstört wird.
+ * STRUKTURELL statt wortbasiert — das ist der Kern des Fixes (v0.4.4): Diese App produziert
+ * ausschließlich Fließtext, niemals Code/Markup. Jedes tag-artige <…>-Konstrukt am Anfang oder Ende
+ * ist daher illegitim — praktisch immer eine echote Transkript-Marke (<transkript>…</transkript>,
+ * v0.3.4). Wir schneiden deshalb JEDES randständige <…> weg, egal welches Wort darin steht.
+ *
+ * Warum nicht mehr auf das Wort matchen: v0.4.3 verlangte „trans[ck]ript" und brach, weil schwächere
+ * Modelle die Schlussmarke VERSTÜMMELT senden (real beobachtet 11.6.2026: „</transcrip>", ohne das
+ * letzte „t"). Gegen solche Abwandlungen ist Wort-Matching prinzipiell fragil; die Struktur (spitze
+ * Klammern am Rand) ist es nicht.
+ *
+ * Bewusst NUR an den Rändern und NUR geklammert: nackte Wörter im Fließtext („Das Transkript war
+ * gut") und ein „<" (echtes „kleiner als") mitten im Satz bleiben unangetastet.
  */
 export function entferneTranskriptMarken(text: string): string {
-  return text.replace(/<\s*\/?\s*trans[ck]ript\s*\/?\s*>/gi, '').trim()
+  let result = text
+  let vorher: string
+  do {
+    vorher = result
+    result = result
+      // vollständiges Tag <…> ganz am Anfang …
+      .replace(/^\s*<[^<>]*>\s*/, '')
+      // … oder ganz am Ende (der Normalfall: echote Schlussmarke, auch verstümmelt wie </transcrip>)
+      .replace(/\s*<[^<>]*>\s*$/, '')
+      // Extra-Härtung: Schlussmarke, der zusätzlich das „>" abgeschnitten wurde → „</…" am Textende.
+      // Nur die „</"-Form, denn echtes „kleiner als" im Satz ist „<", nie „</" → kein Fehlschnitt.
+      .replace(/\s*<\/[^<>\n]*$/, '')
+      .trim()
+  } while (result !== vorher)
+  return result
 }
 
 const SPRACHNAMEN: Record<string, string> = { de: 'Deutsch', en: 'Englisch' }
