@@ -92,9 +92,32 @@ Fertige, portable Windows-`.exe` — kein Installer, kein Admin nötig:
 
 ➡️ **[Neuestes Release herunterladen](https://github.com/edo-dzell/blitztext-app-windows/releases/latest)** → unter „Assets“ die `.exe`.
 
-> **Hinweis:** Die Builds sind unsigniert. Beim ersten Start zeigt Windows SmartScreen ggf.
+> **Hinweis:** Die bisherigen Builds sind unsigniert — Signierung über die
+> [SignPath Foundation](https://signpath.org/) ist beantragt (siehe
+> [Code-Signing](#-code-signing--datenschutz)). Beim ersten Start zeigt Windows SmartScreen ggf.
 > „Unbekannter Herausgeber“ → „Weitere Informationen“ → „Trotzdem ausführen“. Jedes Release enthält
 > `SHA256SUMS.txt` und eine GitHub-Build-Provenance zum Verifizieren.
+
+## 🔏 Code-Signing & Datenschutz
+
+Dieses Projekt nutzt die SignPath Foundation für das Signieren seiner Windows-Releases:
+
+> Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+> [SignPath Foundation](https://signpath.org/).
+
+**Code-Signing-Richtlinie:**
+
+- Signiert werden ausschließlich die offiziellen Release-Artefakte (portable `.exe`), die
+  GitHub Actions auf GitHub-gehosteten Runnern aus diesem Repository baut
+  ([release.yml](.github/workflows/release.yml)) — keine manuell gebauten Binaries.
+- Jeder Signing-Request wird vom Maintainer ([@edo-dzell](https://github.com/edo-dzell))
+  manuell geprüft und freigegeben.
+- Unabhängig davon ist jedes Release über `SHA256SUMS.txt` und GitHub Artifact Attestations
+  (Build-Provenance) verifizierbar.
+
+**Datenschutz:** Blitztext sammelt keine Nutzerdaten und sendet keine Telemetrie. Diktat-Audio
+geht ausschließlich an die vom Nutzer selbst konfigurierten Anbieter (eigener API-Key) oder an
+einen lokalen Endpunkt; Einstellungen, Verlauf und API-Keys bleiben lokal auf dem Rechner.
 
 ## 🚀 Schnellstart
 
