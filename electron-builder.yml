@@ -27,18 +27,19 @@ extraResources:
 # Prebuilds bleibt das v1-zip auf Linux baubar (ADR-0006).
 npmRebuild: false
 
-# v1 = portables zip, unsigniert (ADR-0006). Zielgruppe: kleines internes Team auf bekannten
-# Maschinen. Das zip-Target baut auf Linux OHNE wine (anders als nsis/portable). Der Nutzer
-# entpackt einmal und startet Blitztext.exe aus stabilem Ordner; win-paste.exe liegt als
-# extraResource daneben (process.resourcesPath, s. win-paste-path.ts).
+# Portable, unsigniert (ADR-0006). Zielgruppe: kleines internes Team auf bekannten Maschinen.
+# Nutzer-Regel (2026-06-14): IMMER eine fertige portable .exe ausliefern (nicht das zip) — eine
+# einzelne, selbst-entpackende Datei, win-paste.exe steckt als extraResource darin (resourcesPath).
+# Das portable-Target baut auf Linux OHNE wine, SOLANGE signAndEditExecutable=false ist (der
+# signtool/rcedit-Schritt ist das Einzige, das wine bräuchte). Deckt sich mit dem CI-Release
+# (.github/workflows/release.yml: `electron-builder --win portable`).
 win:
   target:
-    - zip
+    - portable
   artifactName: ${productName}-${version}-win-portable.${ext}
-  # v1 ist unsigniert (ADR-0006). signAndEditExecutable=false ueberspringt den
-  # signtool/rcedit-Schritt, der auf Linux sonst WINE braucht — so baut das zip komplett
-  # ohne wine. Folge: keine in die .exe gestempelten Versions-Metadaten/Icon (kosmetisch,
-  # in v2 mit Signierung wieder aktiv).
+  # Unsigniert (ADR-0006). signAndEditExecutable=false ueberspringt den signtool/rcedit-Schritt,
+  # der auf Linux sonst WINE braucht — so baut die portable .exe komplett ohne wine. Folge: keine
+  # in die .exe gestempelten Versions-Metadaten/Icon (kosmetisch, in v2 mit Signierung wieder aktiv).
   signAndEditExecutable: false
 
 # nsis-Installer + Code-Signierung = v2/RMM (ADR-0005, #09), in v1 bewusst nicht aktiv:

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   aufloeseWorkflowLauf,
   anbieterAusProvider,
+  chatModellAufloesung,
   findeAnbieter,
   type AnbieterKonfig
 } from '@shared/anbieter'
@@ -94,12 +95,14 @@ describe('aufloeseWorkflowLauf', () => {
       { anbieter: [MISTRAL], standardAnbieterId: 'mistral', language: 'de' }
     )
     expect(lauf.chatModell).toBe('mistral-small-latest')
+    expect(lauf.chatModellAbgewertet).toBe(true) // v0.4.5: still ersetzt → als Abwertung markiert
     // Ein frei eingegebenes (keiner Vorlage bekanntes) Modell bleibt dagegen respektiert.
     const frei = aufloeseWorkflowLauf(
       { anbieterId: 'mistral', model: 'mein-eigenes-modell', temperature: 0.3 },
       { anbieter: [MISTRAL], standardAnbieterId: 'mistral', language: 'de' }
     )
     expect(frei.chatModell).toBe('mein-eigenes-modell')
+    expect(frei.chatModellAbgewertet).toBe(false) // eigenes Modell = keine Abwertung
   })
 
   it('Built-ins bleiben auf OpenAI gepinnt, auch wenn der Standard auf Groq wechselt', () => {
@@ -145,6 +148,35 @@ describe('anbieterAusProvider', () => {
     const a = anbieterAusProvider({ id: 'eigenes', baseUrl: 'https://x', asrModell: 'm', chatModell: 'c' })
     expect(a.vorlage).toBe('custom')
     expect(a.label).toBe('eigenes')
+  })
+})
+
+describe('chatModellAufloesung (v0.4.5 Ehrlichkeit)', () => {
+  const MISTRAL: AnbieterKonfig = {
+    id: 'mistral',
+    vorlage: 'mistral',
+    label: 'Mistral',
+    baseUrl: 'https://api.mistral.ai/v1',
+    asrModell: 'voxtral-mini-latest',
+    chatModell: 'mistral-small-latest'
+  }
+  it('leeres Modell → Anbieter-Standard, NICHT abgewertet', () => {
+    expect(chatModellAufloesung('', MISTRAL)).toEqual({ modell: 'mistral-small-latest', abgewertet: false })
+  })
+  it('eigenes/unbekanntes Modell bleibt respektiert, NICHT abgewertet', () => {
+    expect(chatModellAufloesung('mein-modell', MISTRAL)).toEqual({ modell: 'mein-modell', abgewertet: false })
+  })
+  it('fremdes (anderem Anbieter bekanntes) Modell → Standard UND abgewertet=true', () => {
+    expect(chatModellAufloesung('gpt-4o-mini', MISTRAL)).toEqual({
+      modell: 'mistral-small-latest',
+      abgewertet: true
+    })
+  })
+  it('eigenes Vorlagen-Modell bleibt, NICHT abgewertet', () => {
+    expect(chatModellAufloesung('mistral-large-latest', MISTRAL)).toEqual({
+      modell: 'mistral-large-latest',
+      abgewertet: false
+    })
   })
 })
 

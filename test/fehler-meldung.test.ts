@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fehlerMeldung } from '@main/session/fehler-meldung'
+import { fehlerMeldung, teilErfolgMeldung } from '@main/session/fehler-meldung'
 
 describe('fehlerMeldung', () => {
   it('konfiguration → Sprung in die Einstellungen, trägt die Ursache', () => {
@@ -22,5 +22,20 @@ describe('fehlerMeldung', () => {
 
   it('anbieter → trägt die Ursache', () => {
     expect(fehlerMeldung('anbieter', 'Server kaputt').koerper).toBe('Server kaputt')
+  })
+})
+
+describe('teilErfolgMeldung (v0.4.5)', () => {
+  it('umschreibfehler → Strg+V-Hinweis', () => {
+    const m = teilErfolgMeldung('umschreibfehler')
+    expect(m.titel).toBe('Umschreiben fehlgeschlagen')
+    expect(m.koerper).toContain('Strg+V')
+    expect(m.aktion).toBeUndefined()
+  })
+
+  it('beantwortet → benennt den Grund ehrlich (verständlich auch bei Fehlalarm)', () => {
+    const m = teilErfolgMeldung('beantwortet')
+    expect(m.koerper).toContain('Anweisung an die KI')
+    expect(m.koerper).toContain('Zwischenablage')
   })
 })

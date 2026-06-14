@@ -10,6 +10,7 @@
 import { createWorkflowRunner, type Recorder } from '@main/workflow/runner'
 import { createCloudTranscriptionProvider } from '@main/transcription/cloud-provider'
 import { createCloudRewriteProvider } from '@main/rewrite/cloud-provider'
+import { createTreueDetektor } from '@main/rewrite/treue-detektor'
 import { resolveSystemPrompt } from '@main/rewrite/prompt-builder'
 import { shouldRejectRecording, cleanedTranscript, rohtextAus } from '@main/transcription/quality'
 import {
@@ -140,7 +141,9 @@ export async function createMainComposition(deps: CompositionDeps): Promise<Main
     }),
     rewrite: rewriteProvider,
     resolveSystemPrompt,
-    quality: { shouldRejectRecording, cleanedTranscript, rohtextAus }
+    quality: { shouldRejectRecording, cleanedTranscript, rohtextAus },
+    // v0.4.5 (ADR-0018): deterministischer Treue-Detektor, kein zusätzlicher Modell-Aufruf.
+    treueDetektor: createTreueDetektor()
   })
 
   // Verlauf (verschlüsselt, opt-in) + Statistik (text-frei) + Protokoll-Adapter (Strang D).

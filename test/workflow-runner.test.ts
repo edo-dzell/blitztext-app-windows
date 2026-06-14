@@ -455,12 +455,52 @@ describe('createWorkflowRunner', () => {
     runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
     const terminal = await runner.stop()
 
-    expect(terminal).toEqual({ status: 'teilErfolg', rohtext: 'mein rohtext', warnung: 'KI-Fehler: kaputt' })
+    expect(terminal).toEqual({
+      status: 'teilErfolg',
+      rohtext: 'mein rohtext',
+      warnung: 'KI-Fehler: kaputt',
+      grund: 'umschreibfehler'
+    })
     expect(runner.letzteMetrik).toMatchObject({
       rohtext: 'mein rohtext',
       endtext: 'mein rohtext',
       umgeschrieben: false
     })
+  })
+
+  // --- v0.4.5 (ADR-0018): Treue-Detektor → Teil-Erfolg statt falschem Einfügen ---
+
+  it('Treue-Detektor: schlägt an → teilErfolg grund=beantwortet (Rohtext gerettet, kein Einfügen)', async () => {
+    const runner = createWorkflowRunner(
+      makeDeps({
+        transcription: { async transcribe() { return 'gib mir eine empfehlung wie du das machst' } },
+        rewrite: { async rewrite() { return { text: 'Ich würde das so machen.' } } },
+        // Detektor-Stub, der diesen Lauf als „beantwortet" markiert.
+        treueDetektor: { wirktBeantwortet: () => true }
+      })
+    )
+
+    runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toMatchObject({ status: 'teilErfolg', grund: 'beantwortet' })
+    expect(terminal).toMatchObject({ rohtext: 'gib mir eine empfehlung wie du das machst' })
+    // Wie ein Teil-Erfolg protokolliert: umgeschrieben=false, endtext=rohtext (kein falscher Endtext).
+    expect(runner.letzteMetrik).toMatchObject({ umgeschrieben: false })
+  })
+
+  it('Treue-Detektor: schlägt NICHT an → normaler fertig-Abschluss (Endtext eingefügt)', async () => {
+    const runner = createWorkflowRunner(
+      makeDeps({
+        rewrite: { async rewrite() { return { text: 'sauber poliert' } } },
+        treueDetektor: { wirktBeantwortet: () => false }
+      })
+    )
+
+    runner.start({ def: def('improve'), chatModell: 'gpt-4o-mini' })
+    const terminal = await runner.stop()
+
+    expect(terminal).toEqual({ status: 'fertig', text: 'sauber poliert' })
   })
 
   it('Transkriptions-Fehler (kein Rohtext) bleibt fehler; transport-Marker → art netzwerk', async () => {

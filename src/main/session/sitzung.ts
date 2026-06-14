@@ -7,7 +7,7 @@ import { findWorkflow, type WorkflowId } from '@shared/workflows'
 import { aufloeseWorkflowLauf, type AnbieterKonfig } from '@shared/anbieter'
 import type { WorkflowRunner, WorkflowPhase } from '@main/workflow/runner'
 import type { SettingsStore } from '@main/settings/store'
-import { fehlerMeldung, type FehlerMeldung } from '@main/session/fehler-meldung'
+import { fehlerMeldung, teilErfolgMeldung, type FehlerMeldung } from '@main/session/fehler-meldung'
 
 export type Auslösequelle = 'hotkey' | 'manuell'
 
@@ -90,6 +90,15 @@ export function createSitzung(deps: SitzungDeps): Sitzung {
         if (quelle === 'manuell') deps.ausgabe.zeigeEinstellungen()
         return // Hotkey: still abbrechen
       }
+      // v0.4.5 (ADR-0018): ehrlich statt still. Wurde ein Umschreib-Workflow auf den Anbieter-Standard
+      // ABGEWERTET (gepinntes, dem Anbieter fremdes Modell), den Nutzer bei MANUELLER Auslösung
+      // nicht-blockierend informieren (Hotkey bleibt bewusst unsichtbar). Sonst ein No-Op.
+      if (quelle === 'manuell' && def.rewrites && lauf.chatModellAbgewertet) {
+        deps.ausgabe.melde({
+          titel: 'Modell ersetzt',
+          koerper: `Das gewählte Modell ist bei „${lauf.anbieter.label}" nicht verfügbar — es läuft „${lauf.chatModell}".`
+        })
+      }
       aktiveQuelle = quelle
       deps.aktiviereAnbieter?.(lauf.anbieter)
       aktiverKontext = {
@@ -123,13 +132,11 @@ export function createSitzung(deps: SitzungDeps): Sitzung {
         // feuert danach onHistoryChanged. stoppe() bleibt Promise<void> (Kontext als Closure-Arg).
         void protokolliere(kontext)
       } else if (terminal.status === 'teilErfolg') {
-        // Teil-Erfolg: Transkription gelang, Umschreiben scheiterte → Rohtext in die Zwischenablage,
-        // NIE auto-einfügen (bei De-Eskalation wäre der Originaltext das Gegenteil der Absicht).
+        // Teil-Erfolg: Rohtext in die Zwischenablage, NIE auto-einfügen (bei De-Eskalation wäre der
+        // Originaltext das Gegenteil der Absicht; bei einem Treue-Befund wäre der Endtext schlicht
+        // falsch). Die Meldung unterscheidet den Grund (Umschreib-Fehler vs. „beantwortet", v0.4.5).
         deps.ausgabe.inZwischenablage(terminal.rohtext)
-        deps.ausgabe.melde({
-          titel: 'Umschreiben fehlgeschlagen',
-          koerper: 'Der Rohtext liegt in der Zwischenablage — mit Strg+V einfügen.'
-        })
+        deps.ausgabe.melde(teilErfolgMeldung(terminal.grund))
         void protokolliere(kontext)
       } else if (terminal.status === 'fehler') {
         deps.ausgabe.melde(fehlerMeldung(terminal.art, terminal.message))

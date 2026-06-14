@@ -368,6 +368,37 @@ describe('createSitzung', () => {
     expect(calls.einfügen).toEqual(['hallo'])
   })
 
+  // v0.4.5 (ADR-0018): ehrlich statt still — Modell-Downgrade auf den Anbieter-Standard sichtbar machen.
+  // Szenario: nur ein Mistral-Anbieter konfiguriert; improve pinnt das OpenAI-Modell 'gpt-4o-mini' →
+  // fremd für Mistral → still auf 'mistral-small-latest' abgewertet.
+  const NUR_MISTRAL: Partial<BlitztextSettings> = {
+    anbieter: [
+      {
+        id: 'mistral',
+        vorlage: 'mistral',
+        label: 'Mistral',
+        baseUrl: 'https://api.mistral.ai/v1',
+        asrModell: 'voxtral-mini-latest',
+        chatModell: 'mistral-small-latest'
+      }
+    ],
+    standardAnbieterId: 'mistral'
+  }
+
+  it('manuell: warnt nicht-blockierend, wenn das Umschreib-Modell abgewertet wurde', async () => {
+    const { sitzung, calls } = makeSitzung({ settings: NUR_MISTRAL })
+    await sitzung.starteWorkflow('improve', 'manuell')
+    expect(calls.melde).toHaveLength(1)
+    expect(calls.melde[0].titel).toBe('Modell ersetzt')
+    expect(calls.melde[0].koerper).toContain('mistral-small-latest')
+  })
+
+  it('hotkey: bleibt bei abgewertetem Modell still (keine Notification im Hintergrund)', async () => {
+    const { sitzung, calls } = makeSitzung({ settings: NUR_MISTRAL })
+    await sitzung.starteWorkflow('improve', 'hotkey')
+    expect(calls.melde).toEqual([])
+  })
+
   it('L1: key-loser lokaler Anbieter nimmt auch ohne Key auf (Gate lässt durch)', async () => {
     const { sitzung, recorder } = makeSitzung({
       hasKey: false,

@@ -41,6 +41,12 @@ export interface AufgeloesterLauf {
   chatModell: string
   temperature: number
   language: string
+  /**
+   * v0.4.5 (ADR-0018): true, wenn das gepinnte Workflow-Modell einem ANDEREN Anbieter gehörte und
+   * deshalb still auf den Anbieter-Standard ersetzt wurde. Ehrlichkeit statt stillem Downgrade — der
+   * Aufrufer kann nicht-blockierend warnen, statt den Nutzer im Glauben zu lassen, sein Modell liefe.
+   */
+  chatModellAbgewertet: boolean
 }
 
 export function findeAnbieter(
@@ -78,13 +84,30 @@ export function anbieterAusProvider(p: {
  * diesen Anbieter ungültig → Anbieter-Standard (verhindert den Absturz). Ein FREI/eigen eingegebenes
  * Modell (keiner Registry-Vorlage bekannt) bleibt respektiert.
  */
-export function aufgeloestesChatModell(model: string, anbieter: AnbieterKonfig): string {
-  if (!model) return anbieter.chatModell
-  if (modelleFuerVorlage(anbieter.vorlage).chat.some((m) => m.id === model)) return model
+/**
+ * Wie {@link aufgeloestesChatModell}, aber liefert ZUSÄTZLICH, ob ein gepinntes, dem Anbieter FREMDES
+ * Modell ersetzt wurde (`abgewertet`). Quelle der Wahrheit; die String-Variante delegiert hierher.
+ */
+export function chatModellAufloesung(
+  model: string,
+  anbieter: AnbieterKonfig
+): { modell: string; abgewertet: boolean } {
+  if (!model) return { modell: anbieter.chatModell, abgewertet: false }
+  if (modelleFuerVorlage(anbieter.vorlage).chat.some((m) => m.id === model)) {
+    return { modell: model, abgewertet: false }
+  }
   const gehoertAnderem = PROVIDER.some(
     (p) => p.id !== anbieter.vorlage && p.chatModelle.some((m) => m.id === model)
   )
-  return gehoertAnderem ? anbieter.chatModell : model
+  // Fremdes (einem anderen Anbieter bekanntes) Modell → Anbieter-Standard (kein Absturz), aber als
+  // Abwertung markiert. Ein frei/eigen eingegebenes Modell bleibt respektiert (nicht abgewertet).
+  return gehoertAnderem
+    ? { modell: anbieter.chatModell, abgewertet: true }
+    : { modell: model, abgewertet: false }
+}
+
+export function aufgeloestesChatModell(model: string, anbieter: AnbieterKonfig): string {
+  return chatModellAufloesung(model, anbieter).modell
 }
 
 export function aufloeseWorkflowLauf(
@@ -96,13 +119,15 @@ export function aufloeseWorkflowLauf(
     findeAnbieter(ctx.anbieter, ctx.standardAnbieterId) ??
     ctx.anbieter[0]
 
+  const chat = chatModellAufloesung(workflow.model, anbieter)
   return {
     anbieter,
     baseUrl: anbieter.baseUrl,
     // A6/D9: KEIN Pro-Workflow-ASR-Override mehr — die Transkription nutzt ohnehin das Anbieter-ASR-Modell;
     // so protokolliert der Verlauf ehrlich, was wirklich lief (ADR-0016).
     asrModell: anbieter.asrModell,
-    chatModell: aufgeloestesChatModell(workflow.model, anbieter),
+    chatModell: chat.modell,
+    chatModellAbgewertet: chat.abgewertet,
     temperature: workflow.temperature,
     language: workflow.language || ctx.language
   }

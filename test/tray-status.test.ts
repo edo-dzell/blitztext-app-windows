@@ -17,7 +17,7 @@ describe('phaseTooltip', () => {
   })
 
   it('zeigt Teil-Erfolg im Tooltip', () => {
-    expect(phaseTooltip({ status: 'teilErfolg', rohtext: 'x', warnung: 'w' })).toBe(
+    expect(phaseTooltip({ status: 'teilErfolg', rohtext: 'x', warnung: 'w', grund: 'umschreibfehler' })).toBe(
       'Blitztext — Rohtext in Zwischenablage'
     )
   })

@@ -20,7 +20,7 @@ describe('pillenStatus', () => {
   })
 
   it('zeigt Teil-Erfolg (Rohtext in Zwischenablage)', () => {
-    const s = pillenStatus({ status: 'teilErfolg', rohtext: 'x', warnung: 'w' })
+    const s = pillenStatus({ status: 'teilErfolg', rohtext: 'x', warnung: 'w', grund: 'umschreibfehler' })
     expect(s.sichtbar).toBe(true)
     expect(s.label).toContain('Zwischenablage')
   })

@@ -12,6 +12,7 @@ import type { TranscriptionProvider } from '@main/transcription/cloud-provider'
 import type { RewriteProvider } from '@main/rewrite/cloud-provider'
 import type { resolveSystemPrompt, RewriteSettings } from '@main/rewrite/prompt-builder'
 import { kapsleTranskript, entferneTranskriptMarken } from '@main/rewrite/prompt-builder'
+import type { TreueDetektor } from '@main/rewrite/treue-detektor'
 import { klassifiziere, type FehlerArt } from '@main/workflow/fehler-klassifikation'
 import { mitRetry } from '@main/workflow/retry'
 
@@ -41,6 +42,12 @@ export interface WorkflowRunnerDeps {
   rewrite: RewriteProvider
   resolveSystemPrompt: typeof resolveSystemPrompt
   quality: QualityPort
+  /**
+   * Treue-Detektor (v0.4.5, ADR-0018): prüft NACH dem Umschreiben deterministisch, ob das Modell das
+   * Diktat beantwortet/umgedeutet hat (statt es zu bearbeiten). Trifft er zu → Teil-Erfolg (Rohtext
+   * retten) statt falschen Text einzufügen. Optional — fehlt er, bleibt das Verhalten unverändert.
+   */
+  treueDetektor?: TreueDetektor
   /**
    * Watchdog-Backstop: startet einen Timer und ruft `onTimeout`, wenn ein Anbieter-Aufruf hängt;
    * gibt eine Abbruchfunktion zurück. Ohne Angabe: 90 s via setTimeout. Im Test injizierbar.
@@ -80,13 +87,18 @@ export interface RunMetrik {
 // ein Urteil des Runners (zu kurz/Artefakt); die übrigen bestimmt der Klassifizierer aus dem Anbieter-Fehler.
 export type { FehlerArt }
 
+// Warum es zum Teil-Erfolg kam (CONTEXT.md): ein Umschreib-Fehler (Anbieter scheiterte) ODER ein
+// Treue-Befund (das Modell hat das Diktat beantwortet, v0.4.5). Beide retten den Rohtext, aber die
+// Sitzung meldet sie unterschiedlich (siehe sitzung.ts).
+export type TeilErfolgGrund = 'umschreibfehler' | 'beantwortet'
+
 export type WorkflowPhase =
   | { status: 'idle' }
   | { status: 'aufnehmen' }
   | { status: 'transkribieren' }
   | { status: 'umschreiben' }
   | { status: 'fertig'; text: string }
-  | { status: 'teilErfolg'; rohtext: string; warnung: string }
+  | { status: 'teilErfolg'; rohtext: string; warnung: string; grund: TeilErfolgGrund }
   | { status: 'fehler'; art: FehlerArt; message: string }
 
 export interface WorkflowRunner {
@@ -102,6 +114,8 @@ export interface WorkflowRunner {
 
 // Beide Aufnahme-Guards (zu kurz / Artefakt) melden denselben Text wie das macOS-Original.
 const NO_RECORDING_ERROR = 'Keine Aufnahme erkannt.'
+// Interner Grund-Vermerk für den Treue-Abbruch (die nutzergerichtete Meldung baut die Sitzung aus `grund`).
+const BEANTWORTET_WARNUNG = 'Endtext wirkt wie eine Antwort auf das Diktat, nicht wie dessen Bearbeitung.'
 
 export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
   let phase: WorkflowPhase = { status: 'idle' }
@@ -237,6 +251,11 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
         )
         // Etwaig zurückgespiegelte Markierungen entfernen, bevor cleanedTranscript trimmt.
         const endtext = deps.quality.cleanedTranscript(entferneTranskriptMarken(rewritten.text))
+        // Treue-Detektor (v0.4.5, ADR-0018): hat das Modell das Diktat beantwortet statt es zu
+        // bearbeiten? Dann den (geglückten) Rohtext retten statt falschen Text einzufügen.
+        if (deps.treueDetektor?.wirktBeantwortet(rohtext, endtext)) {
+          return teilErfolg(rohtext, recording.durationSeconds, BEANTWORTET_WARNUNG, 'beantwortet')
+        }
         return abschluss(rohtext, endtext, recording.durationSeconds, rewritten.usage, true)
       } catch (err) {
         // Manueller Abbruch: still nach idle (bereits durch abbrechen() gesetzt) — kein Fehler/Metrik.
@@ -251,7 +270,7 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
             : String(err)
         // Teil-Erfolg: Transkription gelang, nur das Umschreiben scheiterte → Rohtext retten.
         if (letzterRohtext !== null) {
-          return teilErfolg(letzterRohtext, recording.durationSeconds, message)
+          return teilErfolg(letzterRohtext, recording.durationSeconds, message, 'umschreibfehler')
         }
         return transition({ status: 'fehler', art, message })
       } finally {
@@ -290,12 +309,18 @@ export function createWorkflowRunner(deps: WorkflowRunnerDeps): WorkflowRunner {
     return transition({ status: 'fertig', text: endtext })
   }
 
-  // Teil-Erfolg (CONTEXT.md): Transkription gelang, Umschreiben scheiterte. Wie ein fertiger Lauf
-  // protokolliert (umgeschrieben=false, endtext=rohtext), aber als eigener Terminal-Zustand, den die
-  // Sitzung NICHT einfügt, sondern in die Zwischenablage legt.
-  function teilErfolg(rohtext: string, dauerSekunden: number, warnung: string): WorkflowPhase {
+  // Teil-Erfolg (CONTEXT.md): die Transkription gelang, aber das Umschreiben scheiterte
+  // (grund='umschreibfehler') ODER der Treue-Detektor verwarf den Endtext (grund='beantwortet', v0.4.5).
+  // Wie ein fertiger Lauf protokolliert (umgeschrieben=false, endtext=rohtext), aber als eigener
+  // Terminal-Zustand, den die Sitzung NICHT einfügt, sondern in die Zwischenablage legt.
+  function teilErfolg(
+    rohtext: string,
+    dauerSekunden: number,
+    warnung: string,
+    grund: TeilErfolgGrund
+  ): WorkflowPhase {
     setzeMetrik(rohtext, rohtext, dauerSekunden, undefined, false)
-    return transition({ status: 'teilErfolg', rohtext, warnung })
+    return transition({ status: 'teilErfolg', rohtext, warnung, grund })
   }
 
   function transition(next: WorkflowPhase): WorkflowPhase {
